@@ -793,6 +793,7 @@ hermes config set fallback_model.model google/gemma-4-31b-it:free
 
 hermes config set agent.reasoning_effort medium
 hermes config set display.personality technical
+hermes config set display.show_reasoning true
 
 hermes config set auxiliary.compression.provider openrouter
 hermes config set auxiliary.compression.model deepseek/deepseek-v4-flash
@@ -809,6 +810,7 @@ Aquí hay un matiz importante: **`hermes config` no imprime todo el YAML**, sino
 
 - `Model` con `deepseek/deepseek-v4-pro`
 - `Display` con `Personality: technical`
+- `Display` con `Reasoning: on`
 - `Context Compression` con `provider=openrouter` y `model=deepseek/deepseek-v4-flash`
 - `Auxiliary Models (overrides)` con `Vision`
 
@@ -818,12 +820,12 @@ Y que, en cambio, **no aparezcan explícitamente** en esa pantalla resumida:
 - `fallback_model`
 - algunas claves internas de `agent`
 
-> Otro detalle que confunde: en `hermes config`, el campo **`Display → Reasoning: off`** se refiere a **mostrar u ocultar el razonamiento en pantalla**, **no** a `agent.reasoning_effort`. Puedes tener `agent.reasoning_effort: medium` y aun así ver `Display → Reasoning: off`.
+> Otro detalle que confunde: en `hermes config`, el campo **`Display → Reasoning`** se refiere a **mostrar u ocultar el razonamiento en pantalla**, **no** a `agent.reasoning_effort`. Son ajustes distintos: puedes tener `agent.reasoning_effort: medium` con `Display → Reasoning: on` o `off`, según quieras ver o esconder ese razonamiento en la salida.
 
 Para verificar la configuración completa, comprueba también el archivo real:
 
 ```bash
-grep -n "default:\\|delegation:\\|fallback_model:\\|reasoning_effort:\\|personality:\\|vision:\\|compression:" ~/.hermes/config.yaml
+grep -n "default:\\|delegation:\\|fallback_model:\\|reasoning_effort:\\|personality:\\|show_reasoning:\\|vision:\\|compression:" ~/.hermes/config.yaml
 ```
 
 En el YAML deberías tener, como mínimo, algo equivalente a esto:
@@ -853,6 +855,7 @@ agent:
 
 display:
   personality: technical
+  show_reasoning: true
 ```
 
 ### 8.3. Qué se hereda automáticamente y qué no
@@ -883,6 +886,29 @@ Desde CLI o desde Discord más adelante:
 
 Esto hace que **todos los comandos que Hermes ejecute** (incluido `git`, `python`, `npm`, etc.) corran dentro de un contenedor sandbox, no directamente en el host.
 
+Si prefieres dejarlo configurado sin tocar `config.yaml` a mano, ejecuta:
+
+```bash
+hermes config set terminal.backend docker
+hermes config set terminal.docker_image nikolaik/python-nodejs:python3.11-nodejs20
+hermes config set terminal.docker_mount_cwd_to_workspace true
+hermes config set terminal.docker_volumes '["/home/hermes/projects:/workspace/projects"]'
+hermes config set terminal.docker_forward_env '["OPENROUTER_API_KEY"]'
+hermes config set terminal.container_cpu 2
+hermes config set terminal.container_memory 4096
+hermes config set terminal.container_persistent true
+
+hermes config set code_execution.mode project
+hermes config set code_execution.timeout 300
+hermes config set code_execution.max_tool_calls 50
+```
+
+> Para listas como `docker_volumes` y `docker_forward_env`, usa comillas simples por fuera y JSON por dentro, tal como en el ejemplo. Así Hermes lo guarda correctamente como array en `config.yaml`.
+>
+> De momento reenviamos solo `OPENROUTER_API_KEY`. `GITHUB_TOKEN` lo añadiremos más adelante, cuando realmente lo configuremos. En `docker_forward_env` no van los valores reales de los secretos, sino **los nombres** de las variables que Hermes debe copiar dentro del contenedor.
+>
+> Dejamos `terminal.container_cpu: 2` y `terminal.container_memory: 4096` porque en este tutorial estamos usando un **Hetzner CX32** (4 vCPU, 8 GB RAM). Reservar **2 vCPU y 4 GB** para el sandbox Docker es un punto medio razonable: da margen suficiente para `npm`, `python`, builds y tests sin comerse todos los recursos del VPS ni dejar sin aire al propio Hermes, al gateway y al sistema base.
+
 ```yaml
 # añade/edita en ~/.hermes/config.yaml
 terminal:
@@ -892,7 +918,6 @@ terminal:
   docker_volumes:
     - "/home/hermes/projects:/workspace/projects"
   docker_forward_env:
-    - GITHUB_TOKEN
     - OPENROUTER_API_KEY
   container_cpu: 2
   container_memory: 4096
@@ -908,19 +933,64 @@ code_execution:
 
 ### 9.2. Skills útiles para programar
 
-```bash
-hermes skills list --remote      # ver catálogo agentskills.io
-hermes skills install coder      # skill genérica de coding
-hermes skills install git-flow
-hermes skills install docker-deploy
-hermes skills install testing
-```
+Hermes ya instala un buen número de **skills bundled** en `~/.hermes/skills/`, así que en este punto del tutorial **no hace falta instalar skills adicionales** para empezar. Lo más útil es saber:
 
-Después:
+- qué skills te ha dejado ya disponibles
+- cómo inspeccionarlas
+- cómo añadir skills extra más adelante si aparece una necesidad concreta
+
+### 9.2.1. Ver las skills que ya tienes
 
 ```bash
-hermes skills list               # confirma que están instaladas
+hermes skills list
 ```
+
+Si quieres ver el catálogo oficial o buscar algo concreto:
+
+```bash
+hermes skills browse --source official
+hermes skills search github
+hermes skills search docker
+```
+
+Y si quieres inspeccionar una skill antes de usarla:
+
+```bash
+hermes skills inspect github-pr-workflow
+hermes skills inspect writing-plans
+```
+
+### 9.2.2. Añadir más skills si las necesitas
+
+Cuando detectes un workflow que Hermes no cubre bien de serie, puedes instalar skills adicionales desde el hub oficial o desde otras fuentes soportadas.
+
+Ejemplos:
+
+```bash
+hermes skills install official/security/1password
+hermes skills install openai/skills/k8s
+```
+
+También puedes buscar antes de instalar:
+
+```bash
+hermes skills search react --source skills-sh
+hermes skills search kubernetes
+```
+
+> La documentación oficial explica que Hermes soporta varias fuentes de skills: las **official** mantenidas dentro del ecosistema Hermes, skills servidas desde GitHub, skills.sh y otros hubs compatibles. Todas pasan por un escaneo de seguridad antes de instalarse.
+
+### 9.2.3. Recomendación práctica para este tutorial
+
+De momento, deja las skills como vienen y no sobrecargues el sistema con skills de terceros “por si acaso”.
+
+La estrategia más sensata aquí es:
+
+1. usar primero las skills bundled
+2. observar qué tareas repites de verdad
+3. instalar solo skills extra cuando tengas un caso claro
+
+Así mantienes Hermes más simple, más predecible y más fácil de depurar.
 
 ### 9.3. Aprobaciones automáticas (modo off)
 
