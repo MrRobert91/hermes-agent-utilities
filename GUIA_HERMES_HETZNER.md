@@ -805,7 +805,28 @@ hermes config set auxiliary.compression.model deepseek/deepseek-v4-flash
 hermes config
 ```
 
-Deberías ver, como mínimo, estas claves reflejadas en la configuración:
+Aquí hay un matiz importante: **`hermes config` no imprime todo el YAML**, sino un **resumen** de los valores principales. Por eso es normal que veas cosas como:
+
+- `Model` con `deepseek/deepseek-v4-pro`
+- `Display` con `Personality: technical`
+- `Context Compression` con `provider=openrouter` y `model=deepseek/deepseek-v4-flash`
+- `Auxiliary Models (overrides)` con `Vision`
+
+Y que, en cambio, **no aparezcan explícitamente** en esa pantalla resumida:
+
+- `delegation`
+- `fallback_model`
+- algunas claves internas de `agent`
+
+> Otro detalle que confunde: en `hermes config`, el campo **`Display → Reasoning: off`** se refiere a **mostrar u ocultar el razonamiento en pantalla**, **no** a `agent.reasoning_effort`. Puedes tener `agent.reasoning_effort: medium` y aun así ver `Display → Reasoning: off`.
+
+Para verificar la configuración completa, comprueba también el archivo real:
+
+```bash
+grep -n "default:\\|delegation:\\|fallback_model:\\|reasoning_effort:\\|personality:\\|vision:\\|compression:" ~/.hermes/config.yaml
+```
+
+En el YAML deberías tener, como mínimo, algo equivalente a esto:
 
 ```yaml
 model:
