@@ -23,8 +23,8 @@ Guía paso a paso para desplegar [Hermes Agent](https://github.com/NousResearch/
 7. [Configurar OpenRouter como proveedor](#7-configurar-openrouter-como-proveedor)
 8. [Configurar varios modelos para distintas tareas](#8-configurar-varios-modelos-para-distintas-tareas)
 9. [Skills de código y backend Docker para ejecución segura](#9-skills-de-código-y-backend-docker-para-ejecución-segura)
-10. [Estructura de carpetas para proyectos](#10-estructura-de-carpetas-para-proyectos)
-11. [Conectar Hermes con Discord](#11-conectar-hermes-con-discord)
+10. [Conectar Hermes con Discord](#10-conectar-hermes-con-discord)
+11. [Estructura de carpetas para proyectos](#11-estructura-de-carpetas-para-proyectos)
 12. [Heartbeats, cron y ejecución desatendida](#12-heartbeats-cron-y-ejecución-desatendida)
 13. [Convertir Hermes en servicio systemd 24/7](#13-convertir-hermes-en-servicio-systemd-247)
 14. [Despliegue de proyectos generados (Caddy + Docker)](#14-despliegue-de-proyectos-generados-caddy--docker)
@@ -653,7 +653,7 @@ Cuando acabe la instalación base y aparezca el configurador:
 4. Si te pide elegir modelo, selecciona uno válido con contexto amplio. Para arrancar, `deepseek/deepseek-v4-pro` es una base razonable y luego lo afinamos en la sección 8.
 5. Cuando pregunte si quieres conectar una plataforma de mensajería (`Connect a messaging platform?`), **de momento sáltalo**: deja la selección en `Skip` o confirma sin seleccionar ninguna plataforma. La idea en esta primera pasada es **no configurar todavía el gateway** y comprobar antes que Hermes base funciona bien en CLI.
 
-> El gateway de Discord lo configuraremos después, en el paso 11. Primero validamos instalación, PATH, proveedor, API key y respuesta del modelo en local.
+> El gateway de Discord lo configuraremos después, en el paso 10. Primero validamos instalación, PATH, proveedor, API key y respuesta del modelo en local.
 
 > Según el flujo actual de Hermes, `Quick setup` usa el mismo selector de proveedor/modelo que `hermes model`, pero **omite** partes más largas del `Full setup`, como rotación de credenciales y configuración adicional de visión/TTS. Si más adelante quieres la configuración completa, ejecuta `hermes setup`.
 
@@ -890,7 +890,7 @@ Si prefieres dejarlo configurado sin tocar `config.yaml` a mano, ejecuta:
 
 ```bash
 hermes config set terminal.backend docker
-hermes config set terminal.docker_image nikolaik/python-nodejs:python3.11-nodejs20
+hermes config set terminal.docker_image nousresearch/hermes-agent:latest
 hermes config set terminal.docker_mount_cwd_to_workspace true
 hermes config set terminal.docker_volumes '["/home/hermes/projects:/workspace/projects"]'
 hermes config set terminal.docker_forward_env '["OPENROUTER_API_KEY"]'
@@ -907,13 +907,15 @@ hermes config set code_execution.max_tool_calls 50
 >
 > De momento reenviamos solo `OPENROUTER_API_KEY`. `GITHUB_TOKEN` lo añadiremos más adelante, cuando realmente lo configuremos. En `docker_forward_env` no van los valores reales de los secretos, sino **los nombres** de las variables que Hermes debe copiar dentro del contenedor.
 >
-> Dejamos `terminal.container_cpu: 2` y `terminal.container_memory: 4096` porque en este tutorial estamos usando un **Hetzner CX32** (4 vCPU, 8 GB RAM). Reservar **2 vCPU y 4 GB** para el sandbox Docker es un punto medio razonable: da margen suficiente para `npm`, `python`, builds y tests sin comerse todos los recursos del VPS ni dejar sin aire al propio Hermes, al gateway y al sistema base.
+> En esta guía usamos `nousresearch/hermes-agent:latest` como imagen del sandbox porque la documentación oficial indica que ya incluye Python, Node, npm, Playwright con Chromium, `ripgrep` y `ffmpeg`. Para un VPS donde Hermes va a programar, navegar y automatizar, es más práctico partir de una imagen generalista ya preparada que de una imagen más mínima.
+>
+> Dejamos `terminal.container_cpu: 2` y `terminal.container_memory: 4096` porque en este tutorial estamos usando un **Hetzner CX32** (4 vCPU, 8 GB RAM). Reservar **2 vCPU y 4 GB** para el sandbox Docker es un punto medio razonable: da margen suficiente para `npm`, `python`, builds, tests y browser tools sin comerse todos los recursos del VPS ni dejar sin aire al propio Hermes, al gateway y al sistema base.
 
 ```yaml
 # añade/edita en ~/.hermes/config.yaml
 terminal:
   backend: docker
-  docker_image: nikolaik/python-nodejs:python3.11-nodejs20
+  docker_image: nousresearch/hermes-agent:latest
   docker_mount_cwd_to_workspace: true
   docker_volumes:
     - "/home/hermes/projects:/workspace/projects"
@@ -1027,10 +1029,10 @@ Hermes puede navegar la web (scrapear docs, leer dashboards, hacer login en webs
 npm install -g agent-browser
 
 # descargar Chromium (Chrome for Testing, canal oficial de Google para automatización)
-npx agent-browser install
+npx agent-browser install --with-deps
 ```
 
-> **Por qué usamos `npx` como comando principal:** en algunos VPS Ubuntu, `npm install -g agent-browser` termina bien pero luego `agent-browser` devuelve `command not found` porque el binario global de npm no ha quedado en el `PATH` de tu sesión actual. `npx agent-browser install` evita ese problema y es más robusto para esta guía.
+> **Por qué usamos `npx agent-browser install --with-deps` como comando principal:** en algunos VPS Ubuntu, `npm install -g agent-browser` termina bien pero luego `agent-browser` devuelve `command not found` porque el binario global de npm no ha quedado en el `PATH` de tu sesión actual. Además, un VPS minimalista suele venir sin varias librerías que Chromium necesita. `npx agent-browser install --with-deps` evita el problema del PATH y deja instaladas también las dependencias del sistema necesarias para que el navegador arranque.
 >
 > Si quieres probar el binario global igualmente, sería:
 >
@@ -1045,11 +1047,7 @@ npx agent-browser install
 > echo $PATH
 > ```
 >
-> Y si en Linux ves que faltan librerías del sistema, usa:
->
-> ```bash
-> npx agent-browser install --with-deps
-> ```
+> En otras palabras: para esta guía, en un VPS Ubuntu, mejor ir directamente a la opción robusta y ahorrarte una segunda pasada de instalación.
 
 Si `agent-browser install` no instala Chromium en algunos VPS minimalistas (Ubuntu cloud-init suele venir muy pelado), instala el binario y las librerías compartidas vía Playwright como fallback:
 
@@ -1100,7 +1098,26 @@ Según la [docu](https://hermes-agent.nousresearch.com/docs/user-guide/features/
 
 #### 9.4.5. Importante: si ejecutas Hermes con `terminal.backend: docker`
 
-El sandbox del paso 9.1 corre `nikolaik/python-nodejs:python3.11-nodejs20`, que **no incluye Chromium ni sus libs**. Tienes dos opciones:
+Aquí la documentación oficial deja un matiz importante:
+
+- el **default** de Hermes para `terminal.backend: docker` es `nikolaik/python-nodejs:python3.11-nodejs20`
+- pero la **imagen oficial de Hermes** (`nousresearch/hermes-agent`) ya trae Python, Node, npm, Playwright con Chromium, `ripgrep` y `ffmpeg`
+
+Para esta guía, donde quieres un sandbox **genérico**, útil para código y compatible con browser tools sin pelearte con dependencias extra, la opción más razonable es usar **la imagen oficial de Hermes** dentro del backend Docker.
+
+### Opción recomendada para esta guía
+
+```bash
+hermes config set terminal.docker_image nousresearch/hermes-agent:latest
+```
+
+> **Por qué recomiendo esta opción:** es la más alineada con la doc oficial cuando quieres navegador + utilidades típicas dentro del contenedor. Sigue siendo una imagen generalista válida para prototipos, scripts Python, Node, `ripgrep`, `ffmpeg` y automatización web, sin tener que construir una imagen custom desde el día uno.
+
+> **Trade-off:** pesa más que `nikolaik/python-nodejs:python3.11-nodejs20`, porque ya incluye Playwright y Chromium. Si fueras a usar Hermes solo para código y terminal, sin browser, el default `nikolaik/...` es más ligero. Pero para este tutorial compensa priorizar compatibilidad y menos fricción.
+
+### Alternativa si quieres mantener la imagen por defecto
+
+Si decides conservar `nikolaik/python-nodejs:python3.11-nodejs20`, entonces el navegador no vive dentro del contenedor y tienes que apoyarte en el host.
 
 **Opción A (más simple):** que el navegador viva en el host y Hermes lo invoque desde dentro del contenedor mediante CDP. En `~/.hermes/.env`:
 
@@ -1110,28 +1127,127 @@ BROWSER_CDP_URL=ws://host.docker.internal:9222
 
 Y arranca Chromium una vez en el host (lo gestiona `agent-browser` automáticamente cuando se llama).
 
-**Opción B (más limpia):** sustituye la imagen Docker por una que ya traiga navegador + libs:
+---
 
+## 10. Conectar Hermes con Discord
+
+Sigue [docs/user-guide/messaging/discord](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/discord).
+
+### 10.1. Crea la app y el bot
+
+1. Entra en <https://discord.com/developers/applications> → **New Application** → nombre `Hermes Lab`.
+2. Pestaña **Bot**:
+   - **Public Bot**: **OFF**.
+   - **Privileged Gateway Intents**:
+     - ✅ **Message Content Intent** (obligatorio para que el bot lea texto).
+     - ✅ **Server Members Intent** (necesario si usarás `DISCORD_ALLOWED_ROLES`).
+3. **Reset Token** → copia el token (solo se muestra una vez).
+
+> **Qué significa `Public Bot`:** si está en `ON`, otros usuarios con permisos suficientes podrían invitar tu bot a sus propios servidores. Si quieres que esta instancia de Hermes sea solo tuya, déjalo en **OFF**.
+>
+> Incluso con `Public Bot: OFF`, mantén `DISCORD_ALLOWED_USERS` configurado con tu propio User ID. Eso hace que, aunque el bot esté presente en un servidor, Hermes ignore a cualquier usuario no autorizado por seguridad.
+
+📸 [images/11-discord-bot-intents.png]
+
+### 10.2. Genera el invite link
+
+Pestaña **Installation → Guild Install → Discord Provided Link**, scopes:
+- `bot`
+- `applications.commands`
+
+Permisos mínimos:
+- View Channels
+- Send Messages
+- Embed Links
+- Attach Files
+- Read Message History
+
+Copia el link generado, ábrelo, escoge tu servidor, autoriza.
+
+📸 [images/12-discord-invite.png]
+
+### 10.3. Saca tu Discord User ID
+
+Discord → **Settings → Advanced → Developer Mode ON** → click derecho sobre tu nombre → **Copy User ID**.
+
+### 10.4. Configura Hermes
+
+Opción interactiva:
+```bash
+hermes gateway setup
+```
+En el selector de plataformas:
+
+- muévete con las flechas hasta `Discord`
+- pulsa **`Space`** para marcarlo como seleccionado (`[x] Discord`)
+- pulsa **`Enter`** solo para confirmar la selección
+
+> **Ojo con este detalle:** `Enter` **no** marca la plataforma, solo confirma la pantalla actual. Si pulsas `Enter` sin haber hecho antes `Space`, Hermes interpreta que no has seleccionado ninguna y muestra `No platforms selected`.
+
+Después de marcar `Discord` correctamente, el asistente te pedirá:
+
+- el **bot token** de Discord
+- tu **Discord User ID** para `DISCORD_ALLOWED_USERS`
+
+Si ya saliste del wizard inicial sin configurarlo, no pasa nada: vuelve al prompt y ejecuta otra vez `hermes gateway setup`.
+
+> Este comando se ejecuta **desde tu shell del VPS**, no desde dentro de una conversación interactiva de `hermes`. Si estás dentro de la interfaz de chat, sal con `Ctrl+C` y luego lánzalo desde el prompt normal.
+
+Opción manual (`~/.hermes/.env`, `chmod 600`):
+```
+DISCORD_BOT_TOKEN=MTAwOTk...tu-token-completo
+DISCORD_ALLOWED_USERS=284102345871466496
+DISCORD_REQUIRE_MENTION=true
+DISCORD_AUTO_THREAD=true
+```
+
+(Opcional, en `config.yaml`):
 ```yaml
-terminal:
-  backend: docker
-  docker_image: mcr.microsoft.com/playwright:v1.50.0-noble  # Playwright oficial con Chromium
-  shm_size: 1g    # Chromium necesita /dev/shm > 64MB para no crashear
+discord:
+  require_mention: true
+  free_response_channels: ""        # canales donde responde sin @mención
+  auto_thread: true
+group_sessions_per_user: true       # cada usuario tiene su contexto en canales compartidos
+unauthorized_dm_behavior: ignore    # ignore | pair
 ```
 
-> Si optas por B, recuerda añadir `--shm-size=1g` también al `docker run` que Hermes usa, vía el flag `shm_size` en config.
+### 10.5. Lanza el gateway
 
-#### 9.4.6. Pruébalo desde Discord
+Solo después de haber configurado Discord en el paso anterior:
 
+```bash
+grep '^DISCORD_' ~/.hermes/.env
+hermes gateway
 ```
+
+`grep` te sirve para verificar antes de arrancar que al menos quedaron guardadas estas variables:
+
+- `DISCORD_BOT_TOKEN`
+- `DISCORD_ALLOWED_USERS`
+
+A los pocos segundos el bot aparece online en tu servidor. Pruébalo:
+
+> @Hermes Lab hola, dime tu modelo actual
+
+Debería responder y, si miras los logs (`hermes logs gateway`), verás los eventos.
+
+📸 [images/13-discord-first-message.png]
+
+### 10.6. Prueba rápida del navegador desde Discord
+
+Una vez que el gateway ya esté arriba y el browser toolset configurado, puedes hacer una prueba más real:
+
+```text
 @Hermes Lab abre https://news.ycombinator.com y dame los 5 títulos más votados de la portada
 ```
 
 Si la primera vez tarda ~10 s extra es Chromium calentando. Las siguientes son inmediatas mientras la sesión esté viva (`inactivity_timeout: 300`).
 
+> Cuando confirmes que funciona, **ctrl+C**: lo convertiremos en servicio en el paso 13.
+
 ---
 
-## 10. Estructura de carpetas para proyectos
+## 11. Estructura de carpetas para proyectos
 
 Vamos a establecer una convención que Hermes respetará vía `MESSAGING_CWD`.
 
@@ -1186,110 +1302,6 @@ EOF
 ```
 
 (Ajusta cuando definamos Caddy en el paso 14.)
-
----
-
-## 11. Conectar Hermes con Discord
-
-Sigue [docs/user-guide/messaging/discord](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/discord).
-
-### 11.1. Crea la app y el bot
-
-1. Entra en <https://discord.com/developers/applications> → **New Application** → nombre `Hermes Lab`.
-2. Pestaña **Bot**:
-   - **Public Bot**: ON.
-   - **Privileged Gateway Intents**:
-     - ✅ **Message Content Intent** (obligatorio para que el bot lea texto).
-     - ✅ **Server Members Intent** (necesario si usarás `DISCORD_ALLOWED_ROLES`).
-3. **Reset Token** → copia el token (solo se muestra una vez).
-
-📸 [images/11-discord-bot-intents.png]
-
-### 11.2. Genera el invite link
-
-Pestaña **Installation → Guild Install → Discord Provided Link**, scopes:
-- `bot`
-- `applications.commands`
-
-Permisos mínimos:
-- View Channels
-- Send Messages
-- Embed Links
-- Attach Files
-- Read Message History
-
-Copia el link generado, ábrelo, escoge tu servidor, autoriza.
-
-📸 [images/12-discord-invite.png]
-
-### 11.3. Saca tu Discord User ID
-
-Discord → **Settings → Advanced → Developer Mode ON** → click derecho sobre tu nombre → **Copy User ID**.
-
-### 11.4. Configura Hermes
-
-Opción interactiva:
-```bash
-hermes gateway setup
-```
-En el selector de plataformas:
-
-- muévete con las flechas hasta `Discord`
-- pulsa **`Space`** para marcarlo como seleccionado (`[x] Discord`)
-- pulsa **`Enter`** solo para confirmar la selección
-
-> **Ojo con este detalle:** `Enter` **no** marca la plataforma, solo confirma la pantalla actual. Si pulsas `Enter` sin haber hecho antes `Space`, Hermes interpreta que no has seleccionado ninguna y muestra `No platforms selected`.
-
-Después de marcar `Discord` correctamente, el asistente te pedirá:
-
-- el **bot token** de Discord
-- tu **Discord User ID** para `DISCORD_ALLOWED_USERS`
-
-Si ya saliste del wizard inicial sin configurarlo, no pasa nada: vuelve al prompt y ejecuta otra vez `hermes gateway setup`.
-
-> Este comando se ejecuta **desde tu shell del VPS**, no desde dentro de una conversación interactiva de `hermes`. Si estás dentro de la interfaz de chat, sal con `Ctrl+C` y luego lánzalo desde el prompt normal.
-
-Opción manual (`~/.hermes/.env`, `chmod 600`):
-```
-DISCORD_BOT_TOKEN=MTAwOTk...tu-token-completo
-DISCORD_ALLOWED_USERS=284102345871466496
-DISCORD_REQUIRE_MENTION=true
-DISCORD_AUTO_THREAD=true
-```
-
-(Opcional, en `config.yaml`):
-```yaml
-discord:
-  require_mention: true
-  free_response_channels: ""        # canales donde responde sin @mención
-  auto_thread: true
-group_sessions_per_user: true       # cada usuario tiene su contexto en canales compartidos
-unauthorized_dm_behavior: ignore    # ignore | pair
-```
-
-### 11.5. Lanza el gateway
-
-Solo después de haber configurado Discord en el paso anterior:
-
-```bash
-grep '^DISCORD_' ~/.hermes/.env
-hermes gateway
-```
-
-`grep` te sirve para verificar antes de arrancar que al menos quedaron guardadas estas variables:
-
-- `DISCORD_BOT_TOKEN`
-- `DISCORD_ALLOWED_USERS`
-
-A los pocos segundos el bot aparece online en tu servidor. Pruébalo:
-
-> @Hermes Lab hola, dime tu modelo actual
-
-Debería responder y, si miras los logs (`hermes logs gateway`), verás los eventos.
-
-📸 [images/13-discord-first-message.png]
-
-> Cuando confirmes que funciona, **ctrl+C**: lo convertiremos en servicio en el paso 13.
 
 ---
 
