@@ -996,15 +996,12 @@ Así mantienes Hermes más simple, más predecible y más fácil de depurar.
 
 Como **todos los comandos se ejecutan dentro del contenedor Docker** del paso 9.1 y el host está aislado, puedes apagar las aprobaciones por completo. Esto permite que Hermes trabaje 100 % desatendido desde Discord sin pedirte confirmación cuando lanza `npm install`, `docker compose up`, `git push`, etc.
 
-```yaml
-# en ~/.hermes/config.yaml
-approvals:
-  mode: off             # manual | smart | off  ← off = sin confirmación
-security:
-  redact_secrets: true  # nunca envía secretos al modelo
-  tirith_enabled: true  # análisis estático de comandos peligrosos
-  tirith_timeout: 5
-  tirith_fail_open: true
+```bash
+hermes config set approvals.mode off
+hermes config set security.redact_secrets true
+hermes config set security.tirith_enabled true
+hermes config set security.tirith_timeout 5
+hermes config set security.tirith_fail_open true
 ```
 
 **Por qué es razonable hacerlo aquí:**
@@ -1030,8 +1027,29 @@ Hermes puede navegar la web (scrapear docs, leer dashboards, hacer login en webs
 npm install -g agent-browser
 
 # descargar Chromium (Chrome for Testing, canal oficial de Google para automatización)
-agent-browser install
+npx agent-browser install
 ```
+
+> **Por qué usamos `npx` como comando principal:** en algunos VPS Ubuntu, `npm install -g agent-browser` termina bien pero luego `agent-browser` devuelve `command not found` porque el binario global de npm no ha quedado en el `PATH` de tu sesión actual. `npx agent-browser install` evita ese problema y es más robusto para esta guía.
+>
+> Si quieres probar el binario global igualmente, sería:
+>
+> ```bash
+> agent-browser install
+> ```
+>
+> Si quieres diagnosticarlo mejor, comprueba dónde instala npm los binarios globales:
+>
+> ```bash
+> npm prefix -g
+> echo $PATH
+> ```
+>
+> Y si en Linux ves que faltan librerías del sistema, usa:
+>
+> ```bash
+> npx agent-browser install --with-deps
+> ```
 
 Si `agent-browser install` no instala Chromium en algunos VPS minimalistas (Ubuntu cloud-init suele venir muy pelado), instala el binario y las librerías compartidas vía Playwright como fallback:
 
