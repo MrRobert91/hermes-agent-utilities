@@ -116,13 +116,65 @@ Precios actualizados al ajuste del **1 abril 2026** ([fuente](https://docs.hetzn
 
 ### 3.2. Sube tu clave SSH
 
-Antes de crear el servidor genera (en tu máquina local) una clave dedicada:
+Antes de crear el servidor genera (en tu máquina local) una clave dedicada. **Importante:** usa la sintaxis adecuada según tu sistema operativo — la expansión de `~` no funciona igual en PowerShell que en bash.
+
+#### En Linux / macOS / WSL / Git Bash
 
 ```bash
 ssh-keygen -t ed25519 -C "hetzner-hermes" -f ~/.ssh/hetzner_hermes
 ```
 
-En la consola de Hetzner: **Security → SSH Keys → Add SSH Key**, pega el contenido de `~/.ssh/hetzner_hermes.pub`.
+#### En Windows PowerShell
+
+PowerShell no siempre expande `~`. Usa `$HOME` y backslashes:
+
+```powershell
+# Asegura que existe la carpeta .ssh (idempotente)
+New-Item -ItemType Directory -Path $HOME\.ssh -Force | Out-Null
+
+# Genera la clave
+ssh-keygen -t ed25519 -C "hetzner-hermes" -f $HOME\.ssh\hetzner_hermes
+```
+
+> Si te aparece `Saving key "~/.ssh/hetzner_hermes" failed: No such file or directory`, es exactamente este problema: `~` no se está expandiendo. Usa `$HOME` como arriba.
+>
+> Si te aparece `'ssh-keygen' is not recognized`, falta el cliente OpenSSH. Instálalo desde PowerShell **como administrador** con: `Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0` y abre una sesión nueva.
+
+#### Verifica que las dos claves se han creado
+
+```powershell
+# PowerShell
+Get-ChildItem $HOME\.ssh\hetzner_hermes*
+```
+
+```bash
+# bash
+ls -la ~/.ssh/hetzner_hermes*
+```
+
+Debes ver dos archivos:
+
+- `hetzner_hermes` → **clave privada** (queda en tu portátil; no se sube a ningún sitio).
+- `hetzner_hermes.pub` → **clave pública** (la que pegas en Hetzner).
+
+#### Copia la pública al portapapeles
+
+```powershell
+# PowerShell
+Get-Content $HOME\.ssh\hetzner_hermes.pub | Set-Clipboard
+```
+
+```bash
+# macOS
+pbcopy < ~/.ssh/hetzner_hermes.pub
+
+# Linux con xclip
+xclip -selection clipboard < ~/.ssh/hetzner_hermes.pub
+```
+
+#### Pégala en Hetzner
+
+Consola Hetzner → **Security → SSH Keys → Add SSH Key**, pega el contenido y dale un nombre identificativo (`hetzner-hermes-laptop`, por ejemplo).
 
 📸 [images/04-hetzner-ssh-key.png]
 
@@ -395,13 +447,31 @@ sudo ufw status verbose
 
 #### Aplicar Cloud Firewall (panel Hetzner)
 
-Hetzner panel → **Firewalls → Create Firewall** → nombre `hermes-lab-fw`. Reglas Inbound:
+Hetzner panel → **Firewalls → Create Firewall** → nombre `hermes-lab-fw`. Crea **3 reglas Inbound**, una por cada puerto:
 
-| Direction | Protocol | Port | Source              | Descripción           |
-| --------- | -------- | ---- | ------------------- | --------------------- |
-| Inbound   | TCP      | 22   | `0.0.0.0/0`, `::/0` | SSH (tú)              |
-| Inbound   | TCP      | 80   | `0.0.0.0/0`, `::/0` | HTTP (Caddy → certs)  |
-| Inbound   | TCP      | 443  | `0.0.0.0/0`, `::/0` | HTTPS (prototipos)    |
+| Description | Sources                  | Protocol | Port | Port range  |
+| ----------- | ------------------------ | -------- | ---- | ----------- |
+| `SSH`       | **Any IPv4 + Any IPv6**  | TCP      | 22   | (vacío)     |
+| `HTTP`      | **Any IPv4 + Any IPv6**  | TCP      | 80   | (vacío)     |
+| `HTTPS`     | **Any IPv4 + Any IPv6**  | TCP      | 443  | (vacío)     |
+
+> ⚠️ **Atención al formulario de Hetzner**:
+>
+> - **Sources** son las IPs origen. Pulsa el desplegable y marca los preset **Any IPv4** y **Any IPv6** (equivale internamente a `0.0.0.0/0` y `::/0`, pero en la UI selecciónalos por nombre).
+> - **Port** es para un puerto único. Pon `22`, `80` o `443`.
+> - **Port range** se deja **vacío**. Solo se usa para rangos como `8000-8100`. Si pegas IPs ahí, Hetzner devuelve `Port is too low`.
+
+#### La regla ICMP que viene por defecto: déjala
+
+Hetzner crea automáticamente una cuarta regla `Protocol: ICMP, Sources: Any IPv4 + Any IPv6`. **Mantenla**. ICMP no es un puerto de servicio, es el protocolo de control de red:
+
+- Hace que `ping` y `traceroute` funcionen (diagnóstico básico cuando algo falla).
+- Soporta **Path MTU Discovery**, sin la cual conexiones por VPN o redes con MTU pequeño se cuelgan en silencio al transferir archivos grandes.
+- En IPv6, ICMPv6 incluye Neighbor Discovery y Router Advertisement: si lo bloqueas, **IPv6 deja de funcionar**. No es opcional.
+
+El riesgo de dejarlo abierto es mínimo (un atacante puede verificar que el host está vivo, pero tu IP ya es pública igualmente) y los floods los absorbe la protección DDoS de Hetzner antes de llegar al VPS.
+
+> **¿Por qué la regla ICMP no tiene puerto?** Los puertos son un concepto de TCP/UDP. ICMP identifica los mensajes por "type" y "code" (echo request, echo reply, destination unreachable…), no por puerto. Hetzner deshabilita los campos Port y Port range automáticamente cuando seleccionas `Protocol: ICMP`. Es correcto que estén vacíos.
 
 Aplica la firewall al servidor `hermes-lab` en la pestaña **Apply to** del propio firewall.
 
@@ -422,7 +492,36 @@ sudo fail2ban-client status sshd
 
 ## 5. Instalar Docker y Docker Compose
 
-Sigues como `hermes`. Instala Docker oficial:
+### ¿Por qué instalamos Docker si Hermes no lo pide?
+
+En el paso 4.1 dije que la única dependencia manual de Hermes es `git`, y es cierto: el `install.sh` se encarga de Python/Node/uv/ripgrep/ffmpeg en un entorno aislado. **Pero Docker no es una dependencia de Hermes**, es una dependencia de la **arquitectura que estamos montando**. Lo necesitamos por tres razones, todas decididas en pasos posteriores:
+
+| Para qué | Definido en | Sin Docker |
+| -------- | ----------- | ---------- |
+| **Sandbox de ejecución del agente** (`terminal.backend: docker`) | Paso 9.1 | Hermes ejecutaría comandos directamente en el host. Pierdes la primera capa de aislamiento que justifica `approvals.mode: off` |
+| **Reverse proxy con HTTPS automático** (Caddy) | Paso 14 | No tienes subdominios HTTPS para los prototipos |
+| **Cada prototipo generado por Hermes** | Paso 14 | Cada proyecto contaminaría dependencias del sistema; sin aislamiento entre prototipos |
+
+Si decidieras renunciar a las tres cosas (`terminal.backend: local`, sin Caddy, ejecutar prototipos directamente en host), podrías saltarte esta sección. **No lo recomiendo** para un lab 24/7 — es lo que diferencia "tengo un agente jugando con mi servidor" de "tengo una incubadora aislada de proyectos".
+
+### ¿Y no debería correr Hermes mismo dentro de Docker?
+
+Es una alternativa válida y la [docu oficial de Hermes en Docker](https://hermes-agent.nousresearch.com/docs/user-guide/docker). Existe una imagen oficial `nousresearch/hermes-agent:latest`.
+
+**Ventajas** de la opción containerizada: actualizaciones triviales (`docker pull && docker compose up -d`), aislamiento total del host, todo el estado en un único volumen `/opt/data`.
+
+**Por qué nuestra guía va con instalación nativa:**
+
+- Más fácil de debuggear (logs directos, `hermes doctor`, `hermes update` funcionan sin saltos de contenedor).
+- Acceso directo al filesystem del host para los volúmenes de proyectos sin "Docker dentro de Docker".
+- El servicio systemd del paso 13 envuelve el binario nativo, lo que da control fino sobre límites de recursos.
+- Es lo que hace el [Quickstart oficial](https://hermes-agent.nousresearch.com/docs/getting-started/quickstart/).
+
+Si en el futuro quieres migrar a Hermes containerizado, los datos de `~/.hermes/` son portables: solo necesitas montarlos en `/opt/data` del contenedor.
+
+### Instalar Docker (oficial)
+
+Sigues como `hermes`. Instala Docker desde el repo oficial:
 
 ```bash
 sudo install -m 0755 -d /etc/apt/keyrings
@@ -437,15 +536,62 @@ sudo apt update
 sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
 sudo usermod -aG docker hermes
-# cierra y vuelve a abrir la sesión SSH para que el grupo se aplique
 ```
 
-Verifica:
+#### Aplicar la pertenencia al grupo `docker`
+
+`usermod -aG docker hermes` añade tu usuario al grupo `docker`, pero **los grupos solo se cargan al iniciar sesión**: la sesión SSH actual sigue sin verlo. Comprueba el estado primero:
+
+```bash
+groups        # te lista los grupos de la sesión actual
+id -nG hermes # los grupos REALES del usuario en /etc/group
+```
+
+Si `groups` no incluye `docker` pero `id -nG hermes` sí, confirma que el cambio está hecho a nivel de sistema y solo falta refrescar la sesión.
+
+Tienes tres formas de hacerlo, ordenadas de más simple a más quirúrgica:
+
+**Opción 1 — Cerrar y volver a abrir SSH (la más limpia):**
+
+```bash
+exit          # o Ctrl+D — cierra la sesión actual
+```
+
+Y desde tu portátil, vuelves a entrar:
+
+```bash
+ssh -i ~/.ssh/hetzner_hermes hermes@SERVER_IP
+groups        # ahora debería incluir 'docker'
+```
+
+**Opción 2 — Sin cerrar SSH, abrir un sub-shell con el grupo recargado:**
+
+```bash
+exec sg docker -c bash
+groups        # incluye 'docker'
+```
+
+`sg` (switch group) lanza un shell con la membresía recargada. Cuando salgas (`exit`), vuelves al shell original sin grupo `docker`. Útil si tienes procesos abiertos en la sesión que no quieres perder.
+
+**Opción 3 — Recargar grupos con `newgrp`:**
+
+```bash
+newgrp docker
+groups
+```
+
+Similar a `sg` pero reemplaza el shell actual. También se sale con `exit`.
+
+Cualquiera de las tres vale. La más recomendable es **opción 1** porque es lo que harás siempre que reconectes y deja todo en estado limpio.
+
+#### Verifica que Docker funciona como `hermes`
 
 ```bash
 docker run --rm hello-world
 docker compose version
 ```
+
+`hello-world` debe imprimir el mensaje de bienvenida de Docker. Si te dice `permission denied while trying to connect to the Docker daemon socket`, es que el grupo todavía no se aplicó: vuelve al paso anterior y reconecta SSH.
 
 ---
 
