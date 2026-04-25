@@ -178,6 +178,15 @@ Consola Hetzner → **Security → SSH Keys → Add SSH Key**, pega el contenido
 
 📸 [images/04-hetzner-ssh-key.png]
 
+> ⚠️ **Importante:** las claves del panel de Hetzner solo se inyectan cuando **creas un servidor nuevo**. Si ya tienes el servidor creado y subes una clave nueva al panel, **no se propaga al servidor existente**. En ese caso tienes que añadirla manualmente al `~/.ssh/authorized_keys` del usuario en el VPS:
+>
+> ```powershell
+> # desde tu portátil — añade tu clave pública al authorized_keys del VPS en una sola línea
+> Get-Content $HOME\.ssh\hetzner_hermes.pub | ssh hermes@SERVER_IP "cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+> ```
+>
+> Asume que `hermes` ya existe (paso 4.2 hecho) y que entras con alguna otra clave válida. Si todavía no has hecho el paso 4 y quieres probar con root, sustituye `hermes` por `root` en el comando.
+
 ### 3.3. Crea el servidor
 
 En la pantalla **Add Server** rellena solo lo siguiente:
@@ -488,6 +497,35 @@ sudo systemctl enable --now fail2ban
 sudo fail2ban-client status sshd
 ```
 
+> ⚠️ **Aviso importante durante el setup inicial:** mientras estés probando claves SSH y autenticación, es muy fácil dispararte 5+ intentos fallidos seguidos y que fail2ban **te banee tu propia IP de casa**. Síntoma típico: ping al servidor funciona, pero `ssh` y `Test-NetConnection -Port 22` dan timeout aunque las firewalls estén OK.
+>
+> Si te pasa, entra por la Consola web de Hetzner (panel → servidor → botón Console) y desbanea:
+>
+> ```bash
+> sudo fail2ban-client status sshd          # ver IPs baneadas
+> sudo fail2ban-client unban --all          # desbanear todo
+> ```
+>
+> Para evitarlo del todo durante la configuración inicial, mantén fail2ban parado y actívalo al final del paso 4:
+>
+> ```bash
+> sudo systemctl stop fail2ban              # mientras configuras
+> # … cuando todo funciona estable …
+> sudo systemctl start fail2ban
+> ```
+>
+> O whitelistea tu IP en `/etc/fail2ban/jail.local`:
+>
+> ```bash
+> sudo tee /etc/fail2ban/jail.local <<'EOF'
+> [DEFAULT]
+> ignoreip = 127.0.0.1/8 ::1 TU_IP_PUBLICA
+> EOF
+> sudo systemctl restart fail2ban
+> ```
+>
+> (Saca tu IP pública con `Invoke-RestMethod ifconfig.me` desde PowerShell.)
+
 ---
 
 ## 5. Instalar Docker y Docker Compose
@@ -601,11 +639,39 @@ Como usuario `hermes`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+```
+
+> **Importante: comportamiento real del instalador actual.** Ese comando ya no se limita a "instalar binarios": al terminar abre el asistente interactivo de Hermes para dejar configurado al menos un proveedor LLM. La doc oficial indica que el instalador gestiona dependencias, clona el repo, crea el entorno, expone el comando global `hermes` **y configura el proveedor LLM**. Refs: [Installation](https://hermes-agent.nousresearch.com/docs/getting-started/installation), [Quickstart](https://hermes-agent.nousresearch.com/docs/getting-started/quickstart/).
+
+### 6.1. Qué elegir en el asistente
+
+Cuando acabe la instalación base y aparezca el configurador:
+
+1. Elige **`Quick setup`**.
+2. En proveedor, elige **`OpenRouter`**.
+3. Pega tu API key de OpenRouter (`sk-or-v1-...`).
+4. Si te pide elegir modelo, selecciona uno válido con contexto amplio. Para arrancar, `deepseek/deepseek-v4-pro` es una base razonable y luego lo afinamos en la sección 8.
+5. Cuando pregunte si quieres conectar una plataforma de mensajería (`Connect a messaging platform?`), **de momento sáltalo**: deja la selección en `Skip` o confirma sin seleccionar ninguna plataforma. La idea en esta primera pasada es **no configurar todavía el gateway** y comprobar antes que Hermes base funciona bien en CLI.
+
+> El gateway de Discord lo configuraremos después, en el paso 11. Primero validamos instalación, PATH, proveedor, API key y respuesta del modelo en local.
+
+> Según el flujo actual de Hermes, `Quick setup` usa el mismo selector de proveedor/modelo que `hermes model`, pero **omite** partes más largas del `Full setup`, como rotación de credenciales y configuración adicional de visión/TTS. Si más adelante quieres la configuración completa, ejecuta `hermes setup`.
+
+### 6.2. Recargar la shell y verificar el binario
+
+Cuando el asistente termine y vuelvas al prompt, **sí conviene seguir con estos comandos**:
+
+```bash
 source ~/.bashrc
 hermes --version
 ```
 
-> El instalador soporta Linux/macOS/WSL2/Termux. Crea `~/.hermes/`, instala dependencias Python en un venv aislado y añade `hermes` al PATH. Refs: [Quickstart](https://hermes-agent.nousresearch.com/docs/getting-started/quickstart/).
+Por qué:
+
+- `source ~/.bashrc` recarga el `PATH` por si el instalador acaba de añadir `~/.local/bin`.
+- `hermes --version` verifica que el comando ya es resoluble desde tu sesión actual.
+
+> Si `source ~/.bashrc` da algún error raro de permisos, abre una sesión SSH nueva como `hermes` y vuelve a probar `hermes --version`. La propia FAQ de Hermes contempla ese caso.
 
 Estructura post-install:
 
@@ -629,6 +695,8 @@ hermes doctor
 
 ## 7. Configurar OpenRouter como proveedor
 
+> Si en el paso 6 ya hiciste `Quick setup` → `OpenRouter` y pegaste la API key, **OpenRouter ya ha quedado configurado**. Esta sección se mantiene porque sirve para verificarlo, rehacerlo si algo falló o documentar la ruta manual.
+
 ### 7.1. Saca una API key de OpenRouter
 
 1. Crea cuenta en <https://openrouter.ai/>.
@@ -639,95 +707,152 @@ hermes doctor
 
 ### 7.2. Carga la key en Hermes
 
+Si **no** la metiste ya dentro del asistente del paso 6, puedes cargarla ahora:
+
 ```bash
 hermes config set OPENROUTER_API_KEY sk-or-v1-XXXXXXXXXXXXXXXXXXXXXXXX
 ```
 
 > Hermes coloca el secreto automáticamente en `~/.hermes/.env` (no en `config.yaml`). Si prefieres editar a mano: `chmod 600 ~/.hermes/.env` y añade `OPENROUTER_API_KEY=...`.
 >
-> Ref: [Configure LLM API Keys](https://hermes-agent.ai/blog/hermes-agent-api-keys), [Providers](https://hermes-agent.nousresearch.com/docs/integrations/providers).
+> Ref: [Providers](https://hermes-agent.nousresearch.com/docs/integrations/providers).
+
+#### Verificación importante: confirma que de verdad quedó guardada
+
+En algunas instalaciones conviene **comprobarlo explícitamente** después del wizard:
+
+```bash
+grep '^OPENROUTER_API_KEY=' ~/.hermes/.env
+hermes auth list
+```
+
+Qué deberías ver:
+
+- en `~/.hermes/.env`, una línea `OPENROUTER_API_KEY=sk-or-v1-...`
+- en `hermes auth list`, una credencial de `openrouter` con origen `env:OPENROUTER_API_KEY`
+
+Si **no** aparece en `.env`, vuelve a fijarla manualmente:
+
+```bash
+hermes config set OPENROUTER_API_KEY sk-or-v1-XXXXXXXXXXXXXXXXXXXXXXXX
+```
+
+> **Señal de que Hermes NO está usando tu propia key:** errores `HTTP 429` de OpenRouter con texto parecido a `add your own key to accumulate your rate limits` y metadatos `is_byok: false`. En ese caso, el asistente dejó OpenRouter seleccionado como proveedor, pero la API key no quedó persistida correctamente.
 
 ### 7.3. Selecciona el proveedor
+
+Si ya lo elegiste durante `Quick setup`, usa este comando solo para comprobar o cambiar la selección:
 
 ```bash
 hermes model
 ```
 
-Elige `openrouter` y, como modelo principal, `deepseek/deepseek-v4-pro`. (En el siguiente paso ajustaremos esto en `config.yaml`).
+Elige `openrouter` y, como modelo principal, `deepseek/deepseek-v4-pro`. (En el siguiente paso afinaremos el resto de roles con `hermes config set`).
 
 ---
 
 ## 8. Configurar varios modelos para distintas tareas
 
-Hermes permite tres "ranuras" útiles ([docs](https://hermes-agent.nousresearch.com/docs/user-guide/configuration/)):
+Después del `Quick setup`, Hermes ya tiene un **modelo principal**. Pero eso **no significa** que configure automáticamente todos los demás roles. Lo importante es entender esta separación:
 
-- **`model`**: el modelo principal (decisiones, código, arquitectura).
-- **`delegation`**: el modelo que reciben los **subagentes** spawneados (debugging, búsquedas, refactors localizados). Suele ser un modelo barato y rápido.
-- **`auxiliary`**: tareas auxiliares (resumen web, vision, MoA). Por defecto Gemini Flash.
+- **`model.default`**: modelo principal del chat normal.
+- **`delegation`**: modelo para subagentes; si no lo defines, hereda el principal.
+- **`auxiliary.vision`**: tareas multimodales (capturas, análisis de imágenes).
+- **`auxiliary.compression`**: resúmenes de contexto cuando la conversación se compacta.
+- **`fallback_model`**: modelo de respaldo si el principal falla por rate limit o caída del proveedor.
+- **`agent.reasoning_effort`**: intensidad de razonamiento; no es otro modelo, es un ajuste del agente.
 
-### 8.1. Recomendación de modelos en OpenRouter (abril 2026)
+En este tutorial vamos a dejarlo así, todo sobre OpenRouter:
 
-| Rol | Modelo | Coste $/Mtok in/out | Por qué |
-|-----|--------|---------------------|---------|
-| **Principal (coding/arquitectura)** | `deepseek/deepseek-v4-pro` | 1.74 / 3.48 | 80.6% en SWE-bench Verified, 1M ctx, ~7× más barato que Claude Opus |
-| **Delegation / chats / compaction** | `deepseek/deepseek-v4-flash` | ~0.30 / 0.60 (aprox.) | MoE eficiente, 1M ctx, ideal para subagentes |
-| **Backup barato** | `deepseek/deepseek-v3.2` | 0.25 / 0.38 | Si V4 está caído o quieres apretar costes |
-| **Auxiliary (vision/web summary)** | `google/gemini-3-flash-preview` | bajo | Default Hermes, multimodal |
-| **Reasoning fuerte (opcional)** | `anthropic/claude-sonnet-4-6` o `openai/gpt-5-codex` | varía | Cuando V4-Pro se queda corto en lógica densa |
+| Uso | Configuración |
+|-----|---------------|
+| **Modelo principal** | `deepseek/deepseek-v4-pro` |
+| **Delegation** | `deepseek/deepseek-v4-flash` |
+| **Auxiliary vision** | `google/gemini-3-flash-preview` |
+| **Auxiliary compression** | `deepseek/deepseek-v4-flash` **o** dejar `auto` |
+| **Fallback model** | `google/gemma-4-31b-it:free` |
+| **Reasoning effort** | `medium` (recomendado) o `high` |
 
-> Ref pricing/modelos: [OpenRouter DeepSeek V4 Pro](https://openrouter.ai/deepseek/deepseek-v4-pro), [OpenRouter DeepSeek V4 Flash](https://openrouter.ai/deepseek/deepseek-v4-flash), [DeepSeek V3.2](https://openrouter.ai/deepseek/deepseek-v3.2).
+> **Recomendación práctica para empezar:** usa `medium`. Sube a `high` solo si ves que en tareas complejas Hermes se queda corto y te compensa pagar algo más de latencia y tokens.
 
-### 8.2. Edita `~/.hermes/config.yaml`
+### 8.1. Configúralo con `hermes config set`
+
+No hace falta abrir el YAML a mano. Como usuario `hermes`, ejecuta:
 
 ```bash
-nano ~/.hermes/config.yaml
+hermes config set model.default deepseek/deepseek-v4-pro
+
+hermes config set delegation.provider openrouter
+hermes config set delegation.model deepseek/deepseek-v4-flash
+
+hermes config set auxiliary.vision.provider openrouter
+hermes config set auxiliary.vision.model google/gemini-3-flash-preview
+
+hermes config set fallback_model.provider openrouter
+hermes config set fallback_model.model google/gemma-4-31b-it:free
+
+hermes config set agent.reasoning_effort medium
+hermes config set display.personality technical
+
+hermes config set auxiliary.compression.provider openrouter
+hermes config set auxiliary.compression.model deepseek/deepseek-v4-flash
 ```
 
-Añade/ajusta estas secciones (deja el resto del archivo como esté):
+
+### 8.2. Comprueba cómo ha quedado
+
+```bash
+hermes config
+```
+
+Deberías ver, como mínimo, estas claves reflejadas en la configuración:
 
 ```yaml
 model:
-  provider: openrouter
   default: deepseek/deepseek-v4-pro
-  fallback_model: deepseek/deepseek-v3.2
-
-provider_routing:
-  sort: throughput        # price | throughput | latency
-  require_parameters: true
-  data_collection: deny   # privacidad: rechaza providers que loggean
 
 delegation:
   provider: openrouter
   model: deepseek/deepseek-v4-flash
-  max_concurrent_children: 3
-  max_spawn_depth: 2
-  orchestrator_enabled: true
 
 auxiliary:
+  vision:
+    provider: openrouter
+    model: google/gemini-3-flash-preview
+  compression:
+    provider: openrouter
+    model: deepseek/deepseek-v4-flash
+
+fallback_model:
   provider: openrouter
-  model: google/gemini-3-flash-preview
+  model: google/gemma-4-31b-it:free
 
 agent:
-  max_turns: 90
+  reasoning_effort: medium
 
-compression:
-  enabled: true
-  threshold: 0.50
-  target_ratio: 0.20
-
-timezone: "Europe/Madrid"
+display:
+  personality: technical
 ```
 
-### 8.3. Cambiar de modelo en caliente
+### 8.3. Qué se hereda automáticamente y qué no
 
-Desde Discord o CLI:
+Esto es lo que más confunde al principio:
 
-```
+- Si **no** configuras `delegation`, los subagentes heredan el modelo principal.
+- `auxiliary.vision` y `auxiliary.compression` **no** heredan automáticamente el modelo principal; usan su propia resolución auxiliar.
+- `fallback_model` **no** se deduce solo: si no lo defines, no hay failover explícito.
+- `agent.reasoning_effort` no cambia de modelo; solo ajusta cómo usa el modelo elegido.
+
+### 8.4. Cambiar de modelo en caliente
+
+Desde CLI o desde Discord más adelante:
+
+```text
 /model openrouter:deepseek/deepseek-v4-pro
-/model openrouter:anthropic/claude-sonnet-4-6
+/model openrouter:deepseek/deepseek-v4-flash
 ```
 
-> Sufijos útiles: `:nitro` (sort throughput), `:floor` (sort price). Ej: `deepseek/deepseek-v4-flash:floor`.
+Úsalo para pruebas puntuales. Para que el comportamiento estable sobreviva reinicios, deja la configuración persistida con `hermes config set`.
 
 ---
 
@@ -998,7 +1123,22 @@ Opción interactiva:
 ```bash
 hermes gateway setup
 ```
-Selecciona Discord, pega bot token y user ID.
+En el selector de plataformas:
+
+- muévete con las flechas hasta `Discord`
+- pulsa **`Space`** para marcarlo como seleccionado (`[x] Discord`)
+- pulsa **`Enter`** solo para confirmar la selección
+
+> **Ojo con este detalle:** `Enter` **no** marca la plataforma, solo confirma la pantalla actual. Si pulsas `Enter` sin haber hecho antes `Space`, Hermes interpreta que no has seleccionado ninguna y muestra `No platforms selected`.
+
+Después de marcar `Discord` correctamente, el asistente te pedirá:
+
+- el **bot token** de Discord
+- tu **Discord User ID** para `DISCORD_ALLOWED_USERS`
+
+Si ya saliste del wizard inicial sin configurarlo, no pasa nada: vuelve al prompt y ejecuta otra vez `hermes gateway setup`.
+
+> Este comando se ejecuta **desde tu shell del VPS**, no desde dentro de una conversación interactiva de `hermes`. Si estás dentro de la interfaz de chat, sal con `Ctrl+C` y luego lánzalo desde el prompt normal.
 
 Opción manual (`~/.hermes/.env`, `chmod 600`):
 ```
@@ -1020,9 +1160,17 @@ unauthorized_dm_behavior: ignore    # ignore | pair
 
 ### 11.5. Lanza el gateway
 
+Solo después de haber configurado Discord en el paso anterior:
+
 ```bash
+grep '^DISCORD_' ~/.hermes/.env
 hermes gateway
 ```
+
+`grep` te sirve para verificar antes de arrancar que al menos quedaron guardadas estas variables:
+
+- `DISCORD_BOT_TOKEN`
+- `DISCORD_ALLOWED_USERS`
 
 A los pocos segundos el bot aparece online en tu servidor. Pruébalo:
 
