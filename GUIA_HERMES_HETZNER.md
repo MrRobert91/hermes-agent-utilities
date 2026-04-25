@@ -351,7 +351,37 @@ Vamos: **endurecer no te encierra**, te obliga a tener tu clave SSH organizada.
 
 **Doble capa**: UFW dentro del VPS + Cloud Firewall en el panel.
 
-UFW dentro (necesita `sudo` porque toca reglas del kernel):
+#### Antes de tocar nada: ¿qué puerto necesita cada cosa?
+
+Es habitual asumir que cada servicio que usa el VPS necesita un puerto abierto. **No es verdad** para servicios *salientes*. Las conexiones que el VPS inicia hacia fuera (Discord, OpenRouter, GitHub, npm, apt…) **no requieren ningún puerto abierto en tu firewall** — el firewall solo regula tráfico entrante. Por eso `ufw default allow outgoing` deja salir todo sin lista blanca.
+
+| Servicio | Tipo | ¿Puerto en tu firewall? |
+| -------- | ---- | ----------------------- |
+| Tú haciendo SSH al VPS | Entrante (tú → VPS, puerto 22) | **Sí: 22** |
+| Tú abriendo `https://miprototipo.lab.dom` en el navegador | Entrante (visitante → Caddy, puertos 80/443) | **Sí: 80 y 443** |
+| Hermes hablando con Discord (recibiendo y enviando mensajes) | **Saliente** (VPS → `gateway.discord.gg:443` por WebSocket) | **No** |
+| Hermes llamando a OpenRouter | Saliente (VPS → `openrouter.ai:443`) | **No** |
+| Hermes haciendo `git pull`, `apt`, `npm install` | Saliente | **No** |
+| Hermes spawneando contenedores Docker | Local entre procesos | **No** |
+
+> Resumen: **Discord no necesita que abras nada**. El bot es un cliente; Discord nunca inicia conexiones hacia tu VPS.
+
+Por tanto, lo que de verdad tienes que decidir es **quién puede llegar al puerto 22 desde Internet**.
+
+#### El puerto 22: lo abrimos a todo Internet
+
+`Source: 0.0.0.0/0, ::/0` para SSH. Sí, suena agresivo, pero es la opción correcta para tu caso (WiFi de casa con IP dinámica del router) **porque el endurecimiento del paso 4.3 ya hace inútiles los intentos de fuerza bruta**:
+
+- `PasswordAuthentication no` → no hay contraseña que adivinar.
+- `PubkeyAuthentication yes` con clave Ed25519 → ~256 bits de seguridad, irrompible en la práctica.
+- `AllowUsers hermes` → solo un usuario es siquiera elegible.
+- `MaxAuthTries 3` + `fail2ban` → cualquier IP que insista queda baneada.
+
+Los bots de Internet seguirán golpeando el puerto 22 (verás los intentos en `/var/log/auth.log`), pero saldrán expulsados antes de hacer nada útil. Es lo que hace la mayoría de servidores Linux en Internet y es perfectamente razonable para un lab personal. Las alternativas (restringir a tu IP — imposible sin IP fija; o montar Tailscale — extra de setup) son mejoras opcionales, no requisitos.
+
+#### Aplicar UFW (dentro del VPS)
+
+`sudo` necesario porque toca reglas del kernel:
 
 ```bash
 sudo ufw default deny incoming
@@ -363,15 +393,17 @@ sudo ufw --force enable
 sudo ufw status verbose
 ```
 
-Cloud Firewall (Hetzner panel → **Firewalls → Create Firewall**):
+#### Aplicar Cloud Firewall (panel Hetzner)
 
-| Direction | Protocol | Port | Source                                          |
-| --------- | -------- | ---- | ----------------------------------------------- |
-| Inbound   | TCP      | 22   | (tu IP/32 si es fija; en otro caso `0.0.0.0/0`) |
-| Inbound   | TCP      | 80   | 0.0.0.0/0                                       |
-| Inbound   | TCP      | 443  | 0.0.0.0/0                                       |
+Hetzner panel → **Firewalls → Create Firewall** → nombre `hermes-lab-fw`. Reglas Inbound:
 
-Aplica la firewall al servidor `hermes-lab`.
+| Direction | Protocol | Port | Source              | Descripción           |
+| --------- | -------- | ---- | ------------------- | --------------------- |
+| Inbound   | TCP      | 22   | `0.0.0.0/0`, `::/0` | SSH (tú)              |
+| Inbound   | TCP      | 80   | `0.0.0.0/0`, `::/0` | HTTP (Caddy → certs)  |
+| Inbound   | TCP      | 443  | `0.0.0.0/0`, `::/0` | HTTPS (prototipos)    |
+
+Aplica la firewall al servidor `hermes-lab` en la pestaña **Apply to** del propio firewall.
 
 📸 [images/06-hetzner-firewall.png]
 
