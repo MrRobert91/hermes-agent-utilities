@@ -770,10 +770,12 @@ En este tutorial vamos a dejarlo así, todo sobre OpenRouter:
 | **Delegation** | `deepseek/deepseek-v4-flash` |
 | **Auxiliary vision** | `google/gemini-3-flash-preview` |
 | **Auxiliary compression** | `deepseek/deepseek-v4-flash` **o** dejar `auto` |
-| **Fallback model** | `google/gemma-4-31b-it:free` |
+| **Fallback model** | `deepseek/deepseek-v4-flash` |
 | **Reasoning effort** | `medium` (recomendado) o `high` |
 
 > **Recomendación práctica para empezar:** usa `medium`. Sube a `high` solo si ves que en tareas complejas Hermes se queda corto y te compensa pagar algo más de latencia y tokens.
+
+> **Nota práctica si vas a usar Hermes sobre todo desde Discord:** el combo `deepseek/deepseek-v4-pro` + `deepseek/deepseek-v4-flash` funciona bien como punto de partida, pero si el upstream provider de OpenRouter para `v4-pro` se satura o degrada, puedes empezar a ver `HTTP 429` aunque tu key y tu VPS estén bien. En ese caso conviene cambiar temporalmente el modelo principal del bot a otro más estable.
 
 ### 8.1. Configúralo con `hermes config set`
 
@@ -789,7 +791,7 @@ hermes config set auxiliary.vision.provider openrouter
 hermes config set auxiliary.vision.model google/gemini-3-flash-preview
 
 hermes config set fallback_model.provider openrouter
-hermes config set fallback_model.model google/gemma-4-31b-it:free
+hermes config set fallback_model.model deepseek/deepseek-v4-flash
 
 hermes config set agent.reasoning_effort medium
 hermes config set display.personality technical
@@ -798,6 +800,67 @@ hermes config set display.show_reasoning true
 hermes config set auxiliary.compression.provider openrouter
 hermes config set auxiliary.compression.model deepseek/deepseek-v4-flash
 ```
+
+### 8.1.1. Bloque final recomendado para Discord si DeepSeek V4 Pro se satura
+
+Si ves errores como estos:
+
+```text
+⚠️ Rate limited — switching to fallback provider...
+❌ Rate limited after 3 retries — HTTP 429: Provider returned error
+```
+
+y en OpenRouter ves que el uptime/health de `deepseek-v4-pro` ha caído, una combinación más robusta para el bot de Discord es:
+
+- **principal**: `qwen/qwen3.6-plus`
+- **fallback**: `minimax/minimax-m2.7`
+- **delegation**: `minimax/minimax-m2.7`
+- **compression**: `qwen/qwen3.6-plus`
+- **vision**: `google/gemini-3-flash-preview`
+
+Bloque listo para copiar:
+
+```bash
+hermes config set model.provider openrouter
+hermes config set model.default qwen/qwen3.6-plus
+
+hermes config set fallback_model.provider openrouter
+hermes config set fallback_model.model minimax/minimax-m2.7
+
+hermes config set delegation.provider openrouter
+hermes config set delegation.model minimax/minimax-m2.7
+
+hermes config set auxiliary.compression.provider openrouter
+hermes config set auxiliary.compression.model qwen/qwen3.6-plus
+
+hermes config set auxiliary.vision.provider openrouter
+hermes config set auxiliary.vision.model google/gemini-3-flash-preview
+
+hermes config set agent.reasoning_effort medium
+hermes config set display.personality technical
+hermes config set display.show_reasoning true
+hermes config set timezone Europe/Madrid
+
+hermes config set provider_routing.sort throughput
+```
+
+Después de cambiar modelos, reinicia el gateway para que el servicio cargue la config nueva:
+
+```bash
+sudo "$(command -v hermes)" gateway stop --system
+sudo "$(command -v hermes)" gateway start --system
+sudo "$(command -v hermes)" gateway status --system
+```
+
+Si quieres verificar el resultado completo en el fichero:
+
+```bash
+grep -n "default:\\|delegation:\\|fallback_model:\\|reasoning_effort:\\|personality:\\|show_reasoning:\\|timezone:\\|vision:\\|compression:" ~/.hermes/config.yaml
+```
+
+> **Qué está pasando en ese escenario:** normalmente no es un problema de timeout ni de tu VPS. OpenRouter balancea entre varios providers y, si el upstream del modelo elegido está saturado o degradado, puede devolverte `429` aunque todo lo local esté correcto. Por eso conviene tener un `fallback_model` real y, si hace falta, cambiar temporalmente el modelo principal del canal interactivo de Discord.
+>
+> También conviene que el **modelo de compresión** tenga una ventana de contexto grande. Si usas un compresor con menos contexto que el umbral de compresión del modelo principal, Hermes bajará el threshold de esa sesión para que quepa. Por eso, en este bloque final, dejamos `qwen/qwen3.6-plus` también en compresión.
 
 
 ### 8.2. Comprueba cómo ha quedado
@@ -808,10 +871,10 @@ hermes config
 
 Aquí hay un matiz importante: **`hermes config` no imprime todo el YAML**, sino un **resumen** de los valores principales. Por eso es normal que veas cosas como:
 
-- `Model` con `deepseek/deepseek-v4-pro`
+- `Model` con el principal actual (por ejemplo `qwen/qwen3.6-plus`)
 - `Display` con `Personality: technical`
 - `Display` con `Reasoning: on`
-- `Context Compression` con `provider=openrouter` y `model=deepseek/deepseek-v4-flash`
+- `Context Compression` con el modelo auxiliar que hayas fijado
 - `Auxiliary Models (overrides)` con `Vision`
 
 Y que, en cambio, **no aparezcan explícitamente** en esa pantalla resumida:
@@ -848,7 +911,7 @@ auxiliary:
 
 fallback_model:
   provider: openrouter
-  model: google/gemma-4-31b-it:free
+  model: deepseek/deepseek-v4-flash
 
 agent:
   reasoning_effort: medium
@@ -892,7 +955,7 @@ Si prefieres dejarlo configurado sin tocar `config.yaml` a mano, ejecuta:
 hermes config set terminal.backend docker
 hermes config set terminal.docker_image nousresearch/hermes-agent:latest
 hermes config set terminal.docker_mount_cwd_to_workspace true
-hermes config set terminal.docker_volumes '["/home/hermes/projects:/workspace/projects"]'
+hermes config set terminal.docker_volumes '["/home/hermes/projects:/workspace/projects","/home/hermes/.hermes/cache/documents:/output"]'
 hermes config set terminal.docker_forward_env '["OPENROUTER_API_KEY"]'
 hermes config set terminal.container_cpu 2
 hermes config set terminal.container_memory 4096
@@ -909,6 +972,14 @@ hermes config set code_execution.max_tool_calls 50
 >
 > En esta guía usamos `nousresearch/hermes-agent:latest` como imagen del sandbox porque la documentación oficial indica que ya incluye Python, Node, npm, Playwright con Chromium, `ripgrep` y `ffmpeg`. Para un VPS donde Hermes va a programar, navegar y automatizar, es más práctico partir de una imagen generalista ya preparada que de una imagen más mínima.
 >
+> Añadimos también este mount:
+>
+> ```text
+> /home/hermes/.hermes/cache/documents:/output
+> ```
+>
+> porque la documentación oficial recomienda un **host-visible export mount** cuando usas mensajería + backend Docker. Así, si Hermes genera un archivo dentro del contenedor, puede escribirlo en `/output/...` y luego el gateway del host lo ve en `/home/hermes/.hermes/cache/documents/...` para enviarlo por Discord, Telegram, etc.
+>
 > Dejamos `terminal.container_cpu: 2` y `terminal.container_memory: 4096` porque en este tutorial estamos usando un **Hetzner CX32** (4 vCPU, 8 GB RAM). Reservar **2 vCPU y 4 GB** para el sandbox Docker es un punto medio razonable: da margen suficiente para `npm`, `python`, builds, tests y browser tools sin comerse todos los recursos del VPS ni dejar sin aire al propio Hermes, al gateway y al sistema base.
 
 ```yaml
@@ -919,6 +990,7 @@ terminal:
   docker_mount_cwd_to_workspace: true
   docker_volumes:
     - "/home/hermes/projects:/workspace/projects"
+    - "/home/hermes/.hermes/cache/documents:/output"
   docker_forward_env:
     - OPENROUTER_API_KEY
   container_cpu: 2
@@ -932,6 +1004,18 @@ code_execution:
 ```
 
 > Ref: [Configuration → Terminal Backends](https://hermes-agent.nousresearch.com/docs/user-guide/configuration/).
+
+Si al arrancar el gateway como servicio ves una advertencia parecida a esta:
+
+```text
+WARNING gateway.run: Docker backend is enabled for the messaging gateway but no explicit host-visible output mount ...
+```
+
+significa que al contenedor le falta justo ese segundo mount de exportación. La forma correcta de evitarlo es dejar `docker_volumes` como en el ejemplo de arriba, con:
+
+```text
+/home/hermes/.hermes/cache/documents:/output
+```
 
 ### 9.2. Skills útiles para programar
 
@@ -1133,38 +1217,133 @@ Y arranca Chromium una vez en el host (lo gestiona `agent-browser` automáticame
 
 Sigue [docs/user-guide/messaging/discord](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/discord).
 
+Antes de entrar en clicks concretos, ayuda mucho entender **qué pinta cada apartado del portal de Discord**. Siguiendo el orden actual de la UI y la documentación oficial:
+
+- **Información general**: identidad básica de la app. Aquí ves `Application ID`, `Public Key`, nombre, icono, descripción y URLs como la `Interactions Endpoint URL`. Para Hermes por gateway, normalmente solo te importa el nombre, el icono y, como referencia, el `Application ID`. No necesitas montar `Interactions Endpoint URL` para el flujo de bot/gateway que usamos aquí.
+- **Instalaciones**: define **cómo** se instala tu app en Discord. Aquí eliges `Guild Install` y/o `User Install`, el tipo de enlace de instalación y los scopes/permisos por defecto. En la UI actual, este apartado es clave: aquí es donde realmente decides si tu bot se puede añadir a servidores, si será instalable por usuarios individuales y qué permisos pedirá al instalarse.
+  
+  Para **este caso concreto**, **no queremos que sea público** ni que otros usuarios puedan añadir la app a su cuenta y hablar con tu instancia de Hermes. La idea es que el bot viva solo en **tu servidor** y que, además, Hermes responda solo a los usuarios que tú autorices con `DISCORD_ALLOWED_USERS`.
+  
+  Configuración recomendada en **Instalación**:
+  
+  - **Instalación de usuarios**: **OFF**
+  - **Instalación de servidor**: **ON**
+  - **Enlace de instalación**: puedes dejar **Enlace proporcionado por Discord** como referencia visual, pero **no será el método que usaremos para invitar el bot** si `Public Bot = OFF`
+  - **Ajustes de instalación predeterminados → Instalación de usuarios**: no usar / dejar desactivado
+  - **Ajustes de instalación predeterminados → Instalación de servidor**: opcional como referencia, pero en este caso mandará la **Manual URL** del paso 10.2
+  
+  Con esto consigues dos cosas:
+  
+  - evitas que la app quede disponible como instalación personal tipo “añadir a mis apps”
+  - fuerzas un flujo controlado donde solo tú la instalas en tu propio servidor
+- **OAuth2**: ajustes de autorización más avanzados. Sirve para flujos OAuth clásicos, URLs de redirect, scopes de login y casos donde tu app necesita actuar en nombre de un usuario o conectar cuentas externas. Para este tutorial de Hermes no es el centro del flujo. De hecho, dejamos `Requires OAuth2 Code Grant` apagado y evitamos complicarlo.
+- **Bot**: configuración del usuario bot. Aquí están el token, `Public Bot`, `Requires OAuth2 Code Grant`, los privileged intents y la calculadora de permisos. Para Hermes este apartado sí es crítico porque de aquí salen el token y el `Message Content Intent`.
+- **Emojis**: gestiona emojis propios de la aplicación. Discord permite subir emojis de app para usarlos como recursos visuales. No es necesario para Hermes.
+- **Webhooks**: sirve para dos familias distintas: webhooks entrantes para publicar mensajes en canales y event webhooks para que Discord te envíe eventos HTTP. Para este tutorial no lo usamos porque Hermes se conecta como bot por gateway, no por webhook.
+- **Rich Presence**: pensado sobre todo para juegos, Activities y experiencias sociales que muestran actividad viva en el perfil del usuario. No es necesario para Hermes como asistente de Discord.
+- **Testers de la aplicación**: permite dar acceso controlado a testers en flujos donde la app necesita pruebas cerradas, especialmente para Activities u otras experiencias más distribuidas. Para un bot privado de Hermes no suele hacer falta.
+- **Verificación de la aplicación**: entra en juego cuando tu app crece, pide permisos sensibles a escala o necesitas revisión de Discord. Para un bot personal en pocos servidores no suele ser un paso inmediato, pero conviene saber que existe si superas ciertos umbrales o quieres operar con más visibilidad.
+
+Resumen práctico para este caso:
+
+- **tocamos de verdad**: `Información general`, `Instalaciones` y `Bot`
+- **podemos ignorar de momento**: `OAuth2`, `Emojis`, `Webhooks`, `Rich Presence`, `Testers de la aplicación`, `Verificación de la aplicación`
+
 ### 10.1. Crea la app y el bot
 
 1. Entra en <https://discord.com/developers/applications> → **New Application** → nombre `Hermes Lab`.
-2. Pestaña **Bot**:
+2. En **General Information**:
+   - pon nombre, icono y descripción si quieres
+   - no hace falta tocar OAuth2, Interactions Endpoint URL ni nada de webhooks para Hermes por gateway
+3. Pestaña **Bot**:
    - **Public Bot**: **OFF**.
+   - **Requires OAuth2 Code Grant**: **OFF**.
    - **Privileged Gateway Intents**:
-     - ✅ **Message Content Intent** (obligatorio para que el bot lea texto).
-     - ✅ **Server Members Intent** (necesario si usarás `DISCORD_ALLOWED_ROLES`).
-3. **Reset Token** → copia el token (solo se muestra una vez).
+     - ❌ **Presence Intent**: **OFF** (Hermes no lo necesita para este caso).
+     - ✅ **Message Content Intent**: **ON** (obligatorio para que Hermes lea el texto de los mensajes normales).
+     - ✅ **Server Members Intent**: **ON**. La documentación oficial de Hermes lo trata como requerido para poder resolver correctamente usuarios permitidos y evitar fallos de identificación.
+4. **Reset Token** → copia el token (solo se muestra una vez).
 
 > **Qué significa `Public Bot`:** si está en `ON`, otros usuarios con permisos suficientes podrían invitar tu bot a sus propios servidores. Si quieres que esta instancia de Hermes sea solo tuya, déjalo en **OFF**.
 >
 > Incluso con `Public Bot: OFF`, mantén `DISCORD_ALLOWED_USERS` configurado con tu propio User ID. Eso hace que, aunque el bot esté presente en un servidor, Hermes ignore a cualquier usuario no autorizado por seguridad.
 
+> **Qué significa `Requires OAuth2 Code Grant`:** déjalo en **OFF**. Ese flujo completo de OAuth2 no es necesario para el uso normal de Hermes como bot en tu servidor y solo complica la instalación.
+
+> **Importante con la UI actual de Discord:** en la pestaña **Bot** ves también una gran tabla de “Permisos del bot”. Tómala como calculadora o referencia. En la práctica, si usas **Discord Provided Link**, los permisos que importan para la instalación se fijan en la pestaña **Installation**, dentro de **Default Install Settings**.
+
 📸 [images/11-discord-bot-intents.png]
 
 ### 10.2. Genera el invite link
 
-Pestaña **Installation → Guild Install → Discord Provided Link**, scopes:
-- `bot`
-- `applications.commands`
+En la documentación oficial de Hermes hay dos caminos:
 
-Permisos mínimos:
-- View Channels
-- Send Messages
-- Embed Links
-- Attach Files
-- Read Message History
+- **Option A: Installation tab** → recomendado solo si `Public Bot = ON`
+- **Option B: Manual URL** → obligatorio si `Public Bot = OFF`
 
-Copia el link generado, ábrelo, escoge tu servidor, autoriza.
+Como en **esta guía queremos el bot privado**, **nuestro caso es Option B: Manual URL**.
+
+1. Ve a **Installation**.
+2. En **Installation Contexts**:
+   - ✅ **Guild Install**: **ON**
+   - ❌ **User Install**: **OFF**
+3. Si ves **Discord Provided Link**, tómalo solo como referencia visual del portal, **pero no lo uses**: con `Public Bot = OFF`, la propia documentación de Hermes indica que debes invitar el bot con una **Manual URL**.
+4. Copia tu **Application ID** desde **General Information**.
+5. Construye esta URL manual:
+
+```text
+https://discord.com/oauth2/authorize?client_id=TU_APPLICATION_ID&scope=bot+applications.commands&permissions=274878286912
+```
+
+Sustituye `TU_APPLICATION_ID` por el ID real de tu aplicación.
+
+> La doc oficial de Hermes lo dice explícitamente: **“If you prefer to keep your bot private (Public Bot = OFF), you must use the Manual URL method in Step 5 instead of the Installation tab. The Discord-provided link requires Public Bot to be enabled.”**
+
+#### Permisos recomendados según la doc oficial de Hermes
+
+Estos son los permisos **mínimos/útiles** que Hermes recomienda para Discord:
+
+- **View Channels** — ver los canales a los que tiene acceso
+- **Send Messages** — responder
+- **Embed Links** — formatear respuestas enriquecidas
+- **Attach Files** — enviar imágenes, audio y archivos generados
+- **Read Message History** — mantener contexto de conversación
+- **Send Messages in Threads** — responder dentro de hilos
+- **Add Reactions** — poner reacciones de estado (👀, ✅, ❌)
+
+> Como `DISCORD_AUTO_THREAD=true` y `DISCORD_REACTIONS=true` son defaults importantes en Hermes, para esta guía recomiendo directamente el set **recommended** de la documentación oficial, no el mínimo.
+
+#### Enteros de permisos útiles
+
+La documentación oficial de Hermes da estos dos valores:
+
+- **Minimal**: `117760`
+- **Recommended**: `274878286912`
+
+Para este tutorial usa **Recommended**:
+
+```text
+permissions=274878286912
+```
+
+Abre la URL manual en tu navegador, elige tu servidor y autoriza la instalación.
 
 📸 [images/12-discord-invite.png]
+
+> **Privacidad recomendada para esta guía:** no dejes abierto **User Install** si no necesitas que el bot funcione como app instalable por usuarios individuales. Para este laboratorio, lo normal es:
+>
+> - usar **Guild Install**
+> - invitar el bot solo a **tu propio servidor**
+> - mantener **`Public Bot: OFF`**
+>
+> Con eso reduces al mínimo la superficie de exposición y evitas que otros usuarios instalen o distribuyan tu bot fuera de tu entorno controlado.
+
+> **Resumen del cambio importante en la documentación actual de Discord:** antes mucha gente configuraba scopes y permisos pensando en OAuth2 clásico o mirando solo la pestaña **Bot**. Ahora, con la UI moderna, lo correcto para este caso es:
+>
+> - **Bot**: token + intents + privacidad del bot
+> - **Installation**: contexts + install link + scopes + permisos efectivos de instalación
+>
+> Pero en **tu caso privado**, con `Public Bot: OFF`, la invitación real se hace con la **Manual URL** de arriba, no con el enlace autogenerado de Discord.
 
 ### 10.3. Saca tu Discord User ID
 
@@ -1188,6 +1367,7 @@ Después de marcar `Discord` correctamente, el asistente te pedirá:
 
 - el **bot token** de Discord
 - tu **Discord User ID** para `DISCORD_ALLOWED_USERS`
+- opcionalmente, un **Channel ID** si quieres dejar preconfigurado un canal “home” para mensajes proactivos (`DISCORD_HOME_CHANNEL`)
 
 Si ya saliste del wizard inicial sin configurarlo, no pasa nada: vuelve al prompt y ejecuta otra vez `hermes gateway setup`.
 
@@ -1197,9 +1377,32 @@ Opción manual (`~/.hermes/.env`, `chmod 600`):
 ```
 DISCORD_BOT_TOKEN=MTAwOTk...tu-token-completo
 DISCORD_ALLOWED_USERS=284102345871466496
+DISCORD_HOME_CHANNEL=123456789012345678
 DISCORD_REQUIRE_MENTION=true
 DISCORD_AUTO_THREAD=true
 ```
+
+Bloque final recomendado para **este tutorial** (bot privado, un único operador, servidor propio):
+
+```env
+DISCORD_BOT_TOKEN=pega_aqui_el_token_real_del_bot
+DISCORD_ALLOWED_USERS=pega_aqui_tu_discord_user_id
+DISCORD_HOME_CHANNEL=pega_aqui_el_channel_id_donde_quieres_notificaciones
+DISCORD_REQUIRE_MENTION=true
+DISCORD_AUTO_THREAD=true
+DISCORD_REACTIONS=true
+```
+
+Qué significa cada línea:
+
+- `DISCORD_BOT_TOKEN`: el token del bot sacado de la pestaña **Bot**
+- `DISCORD_ALLOWED_USERS`: tu `User ID` de Discord; Hermes solo responderá a esos usuarios
+- `DISCORD_HOME_CHANNEL`: canal “home” para cron, avisos y salidas proactivas
+- `DISCORD_REQUIRE_MENTION=true`: en canales de servidor, Hermes solo responde si lo mencionas con `@`
+- `DISCORD_AUTO_THREAD=true`: cada mención en un canal normal abre un hilo nuevo para aislar la conversación
+- `DISCORD_REACTIONS=true`: Hermes usa reacciones emoji de estado cuando corresponde
+
+> Si todavía no tienes claro qué canal usar como `DISCORD_HOME_CHANNEL`, puedes dejar esa línea fuera al principio y fijarlo después desde Discord con `/sethome`.
 
 (Opcional, en `config.yaml`):
 ```yaml
@@ -1210,6 +1413,8 @@ discord:
 group_sessions_per_user: true       # cada usuario tiene su contexto en canales compartidos
 unauthorized_dm_behavior: ignore    # ignore | pair
 ```
+
+> `DISCORD_HOME_CHANNEL` es opcional. Según la doc oficial, sirve para que Hermes envíe allí salidas proactivas como cron jobs, recordatorios y notificaciones. También puedes fijarlo luego desde Discord con el comando `/sethome`.
 
 ### 10.5. Lanza el gateway
 
@@ -1224,6 +1429,35 @@ hermes gateway
 
 - `DISCORD_BOT_TOKEN`
 - `DISCORD_ALLOWED_USERS`
+
+Si al final del asistente te pregunta:
+
+```text
+Install the gateway as a systemd service? (runs in background, starts on boot) [Y/n]:
+```
+
+en un **VPS** lo correcto es:
+
+- responder **`n`** dentro del asistente
+- terminar el setup normal
+- y luego instalar el servicio del sistema manualmente con `sudo`
+
+Esto no contradice la recomendación de Hermes de usar `systemd` en un host headless. Lo que ocurre es simplemente que **el wizard no puede crear un servicio de sistema desde tu sesión de usuario sin privilegios**.
+
+> Matiz importante de la doc oficial:
+>
+> - en portátiles o máquinas de desarrollo, suele bastar el **user service**
+> - en un **VPS**, lo apropiado es el **system service** / servicio de arranque
+>
+> Si el asistente te muestra este aviso, es normal:
+>
+> ```text
+> System service install requires sudo, so Hermes can't create it from this user session.
+> After setup, run: sudo "$(command -v hermes)" gateway install --system --run-as-user hermes
+> Then start it with: sudo "$(command -v hermes)" gateway start --system
+> ```
+>
+> Más abajo, en la sección 13, dejamos esto explicado con calma y con comandos de verificación.
 
 A los pocos segundos el bot aparece online en tu servidor. Pruébalo:
 
@@ -1360,58 +1594,132 @@ Desde Discord: `/status`, `/disk`, `/containers` se resuelven sin llamar al mode
 
 ## 13. Convertir Hermes en servicio systemd 24/7
 
-Crea como **root** (con `sudo`):
+En un VPS, la documentación oficial de Hermes recomienda usar el **system service** del propio gateway en vez de depender de una sesión interactiva abierta.
 
-```bash
-sudo tee /etc/systemd/system/hermes-gateway.service > /dev/null <<'EOF'
-[Unit]
-Description=Hermes Agent - Messaging Gateway
-After=network-online.target docker.service
-Wants=network-online.target
+Si durante `hermes gateway setup` viste este aviso:
 
-[Service]
-Type=simple
-User=hermes
-Group=hermes
-WorkingDirectory=/home/hermes
-Environment="PATH=/home/hermes/.local/bin:/usr/local/bin:/usr/bin:/bin"
-ExecStart=/home/hermes/.local/bin/hermes gateway
-Restart=on-failure
-RestartSec=10
-StandardOutput=append:/home/hermes/.hermes/logs/gateway.log
-StandardError=append:/home/hermes/.hermes/logs/gateway.err
-
-# Hardening
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=full
-ProtectHome=false
-ReadWritePaths=/home/hermes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now hermes-gateway
-sudo systemctl status hermes-gateway
+```text
+System service install requires sudo, so Hermes can't create it from this user session.
+After setup, run: sudo "$(command -v hermes)" gateway install --system --run-as-user hermes
+Then start it with: sudo "$(command -v hermes)" gateway start --system
 ```
 
-> Si la ruta de `hermes` no es `/home/hermes/.local/bin/hermes`, comprueba con `which hermes` y ajusta `ExecStart`.
+es totalmente normal: el asistente corre como tu usuario `hermes`, pero **crear un servicio de sistema requiere `sudo`**.
 
-Repite con un servicio paralelo para el cron scheduler si así está separado en tu versión:
+### 13.1. Instala el servicio de sistema oficial de Hermes
 
 ```bash
-hermes cron --help     # comprueba si hay un subcomando 'serve' o 'daemon'
+sudo "$(command -v hermes)" gateway install --system --run-as-user hermes
+sudo "$(command -v hermes)" gateway start --system
+sudo "$(command -v hermes)" gateway status --system
 ```
 
-A día de hoy `hermes gateway` ya levanta el cron en el mismo proceso, pero verifica con `hermes status`.
+> En muchos Ubuntu, `sudo` no hereda `~/.local/bin`, así que `sudo hermes ...` puede fallar con `command not found` aunque `hermes` funcione bien en tu shell. Por eso aquí usamos `sudo "$(command -v hermes)" ...`, que resuelve primero la ruta real del binario.
 
-Logs:
+Esto crea un servicio `systemd` de arranque que:
+
+- corre en background
+- arranca con el servidor
+- sigue funcionando aunque cierres la sesión SSH
+- ejecuta el gateway como usuario `hermes`
+
+> La propia doc oficial recomienda **user service** para portátiles/dev boxes y **system service** para VPS o hosts headless.
+
+### 13.2. Verifica que está bien levantado
+
 ```bash
+sudo "$(command -v hermes)" gateway status --system
 journalctl -u hermes-gateway -f
-tail -f ~/.hermes/logs/gateway.log
 ```
+
+Si quieres pararlo o reiniciarlo:
+
+```bash
+sudo "$(command -v hermes)" gateway stop --system
+sudo "$(command -v hermes)" gateway start --system
+```
+
+### 13.2.1. Si ves `status=75` o “Gateway process is running for this profile”
+
+Este caso nos salió de verdad durante la instalación en el VPS. La causa típica es:
+
+- ya había un `hermes gateway` lanzado manualmente en foreground / tmux / nohup
+- luego intentas arrancar además el servicio `systemd`
+- Hermes detecta dos gateways para el mismo perfil y bloquea el arranque limpio
+
+Síntomas típicos:
+
+- `gateway status --system` muestra `status=75`
+- aparece `Restart pending`
+- Hermes avisa: `Gateway process is running for this profile, but the service is not active`
+
+Flujo correcto para arreglarlo:
+
+```bash
+# 1) parar el servicio systemd si está en bucle
+sudo "$(command -v hermes)" gateway stop --system
+
+# 2) cerrar cualquier gateway manual del perfil actual
+"$(command -v hermes)" gateway stop
+
+# 3) comprobar que ya no quedan procesos sueltos
+sudo "$(command -v hermes)" gateway status --system
+
+# 4) arrancar de nuevo solo el servicio systemd
+sudo "$(command -v hermes)" gateway start --system
+sudo "$(command -v hermes)" gateway status --system
+```
+
+En nuestro caso real del VPS, la secuencia que terminó funcionando fue esta:
+
+```bash
+sudo "$(command -v hermes)" gateway stop --all
+pgrep -af "hermes.*gateway|hermes_cli.main gateway|gateway run"
+sudo systemctl reset-failed hermes-gateway
+sudo "$(command -v hermes)" gateway start --system
+sudo "$(command -v hermes)" gateway status --system
+```
+
+Y el estado bueno final que quieres ver es algo como:
+
+```text
+Active: active (running)
+✓ System gateway service is running
+✓ System service starts at boot without requiring systemd linger
+```
+
+Si aun así Hermes sigue diciendo que hay procesos manuales vivos, revisa los logs completos:
+
+```bash
+sudo journalctl -u hermes-gateway -n 100 -l
+```
+
+Y como último recurso, mata los gateways del perfil antes de volver a arrancar el servicio:
+
+```bash
+"$(command -v hermes)" gateway stop --all
+sudo "$(command -v hermes)" gateway start --system
+```
+
+> No mezcles a la vez:
+>
+> - un `hermes gateway` lanzado manualmente
+> - y el `systemd` service
+>
+> Elige uno. En este tutorial, en VPS, el que queremos dejar al final es **solo el servicio `systemd`**.
+
+### 13.3. Sobre cron y tareas en background
+
+Según la documentación actual de Hermes, `hermes gateway` ya gestiona también el scheduler de cron del gateway, así que **no necesitas un segundo servicio separado** para cron en este flujo estándar.
+
+### 13.4. Evita duplicar servicios
+
+No dejes a la vez:
+
+- un `hermes gateway` corriendo en foreground en una terminal
+- y el servicio `systemd`
+
+Y evita también tener instalados a la vez el **user service** y el **system service**, porque Hermes avisa de que eso vuelve ambiguos los comandos `start/stop/status`.
 
 ---
 
