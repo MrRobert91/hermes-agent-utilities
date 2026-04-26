@@ -895,11 +895,11 @@ En el YAML deberías tener, como mínimo, algo equivalente a esto:
 
 ```yaml
 model:
-  default: deepseek/deepseek-v4-pro
+  default: qwen/qwen3.6-plus
 
 delegation:
   provider: openrouter
-  model: deepseek/deepseek-v4-flash
+  model: minimax/minimax-m2.7
 
 auxiliary:
   vision:
@@ -907,11 +907,11 @@ auxiliary:
     model: google/gemini-3-flash-preview
   compression:
     provider: openrouter
-    model: deepseek/deepseek-v4-flash
+    model: qwen/qwen3.6-plus
 
 fallback_model:
   provider: openrouter
-  model: deepseek/deepseek-v4-flash
+  model: minimax/minimax-m2.7
 
 agent:
   reasoning_effort: medium
@@ -919,6 +919,8 @@ agent:
 display:
   personality: technical
   show_reasoning: true
+
+timezone: Europe/Madrid
 ```
 
 ### 8.3. Qué se hereda automáticamente y qué no
@@ -1100,116 +1102,31 @@ hermes config set security.tirith_fail_open true
 
 > Si en algún momento prefieres volver a confirmaciones, cambia a `mode: smart` (Hermes pregunta solo en lo destructivo, usando el modelo auxiliar) o `mode: manual` (todo confirmado). Ref: [Configuration → Security & Approvals](https://hermes-agent.nousresearch.com/docs/user-guide/configuration/).
 
-### 9.4. Navegador local con Chromium (sin servicios externos)
+### 9.4. Browser automation: lo dejamos para una iteración posterior
 
-Hermes puede navegar la web (scrapear docs, leer dashboards, hacer login en webs, sacar screenshots, etc.) usando **Chromium en local**, sin pagar Browserbase, Browser Use ni Firecrawl. Es lo que recomienda la [documentación oficial del navegador](https://hermes-agent.nousresearch.com/docs/user-guide/features/browser): si no defines credenciales cloud, Hermes cae automáticamente en modo local con `agent-browser` + Chromium headless.
+Hermes soporta navegación web y automatización de navegador, tanto con browser local como con proveedores cloud. Pero en **este VPS concreto** no hemos dejado el camino de navegador completamente validado y estable todavía.
 
-#### 9.4.1. Instala `agent-browser` y Chromium
+En las pruebas reales de esta guía nos pasó esto:
 
-`agent-browser` es el wrapper Node que Hermes usa para hablar con Chromium vía CDP. Está en npm.
+- el `browser` toolset sí intenta abrir páginas
+- pero el navegador local cae por problemas de **sandbox**
+- y Hermes hace fallback a herramientas como `curl` o extracción por terminal/Python
 
-```bash
-# instalar agent-browser globalmente (Node 22 ya está instalado por hermes install.sh)
-npm install -g agent-browser
+Por tanto, para que este tutorial refleje el estado real del sistema, **no vamos a vender todavía “Chromium local funcionando” como parte del setup base**.
 
-# descargar Chromium (Chrome for Testing, canal oficial de Google para automatización)
-npx agent-browser install --with-deps
-```
+Qué dejamos sí preparado:
 
-> **Por qué usamos `npx agent-browser install --with-deps` como comando principal:** en algunos VPS Ubuntu, `npm install -g agent-browser` termina bien pero luego `agent-browser` devuelve `command not found` porque el binario global de npm no ha quedado en el `PATH` de tu sesión actual. Además, un VPS minimalista suele venir sin varias librerías que Chromium necesita. `npx agent-browser install --with-deps` evita el problema del PATH y deja instaladas también las dependencias del sistema necesarias para que el navegador arranque.
->
-> Si quieres probar el binario global igualmente, sería:
->
-> ```bash
-> agent-browser install
-> ```
->
-> Si quieres diagnosticarlo mejor, comprueba dónde instala npm los binarios globales:
->
-> ```bash
-> npm prefix -g
-> echo $PATH
-> ```
->
-> En otras palabras: para esta guía, en un VPS Ubuntu, mejor ir directamente a la opción robusta y ahorrarte una segunda pasada de instalación.
+- la imagen Docker `nousresearch/hermes-agent:latest`, que es una buena base generalista
+- el espacio para trabajar más adelante con `agent-browser`, CDP o un proveedor cloud
+- la constatación de que el backend principal de Hermes, Discord, Docker sandbox y modelos LLM sí funcionan
 
-Si `agent-browser install` no instala Chromium en algunos VPS minimalistas (Ubuntu cloud-init suele venir muy pelado), instala el binario y las librerías compartidas vía Playwright como fallback:
+Qué dejamos fuera de este walkthrough base:
 
-```bash
-npx playwright install chromium
-sudo npx playwright install-deps chromium     # instala libnss3, libatk, libdrm, libxkbcommon, etc.
-```
+- instalación y validación completa de Chromium local
+- conexión por CDP a un navegador del host
+- automatización browser end-to-end confirmada desde Discord
 
-> El paso `install-deps` mete ~30 paquetes apt necesarios para Chromium headless (fuentes, GTK, NSS, etc.). Sin ellos, el navegador se cae al primer `page.goto()`.
-
-#### 9.4.2. Activa el toolset `browser` en Hermes
-
-```bash
-hermes config set toolsets '["hermes-cli", "browser"]'
-```
-
-O directamente en `~/.hermes/config.yaml`:
-
-```yaml
-toolsets:
-  - hermes-cli
-  - browser
-
-browser:
-  cloud_provider: ""          # vacío = modo local (default si no hay creds cloud)
-  inactivity_timeout: 300     # segundos antes de cerrar sesión idle
-  command_timeout: 30000      # ms para acciones individuales (navigate, screenshot…)
-  # cdp_url: ""               # solo si quisieras conectar a un Chrome ya abierto
-```
-
-#### 9.4.3. Confirma que NO usa servicios externos
-
-Asegúrate de que en `~/.hermes/.env` **NO** existen estas variables (cualquiera de ellas activa un proveedor cloud y desactiva el modo local):
-
-```bash
-grep -E '^(BROWSERBASE_API_KEY|BROWSER_USE_API_KEY|FIRECRAWL_API_KEY|BROWSER_CDP_URL|CAMOFOX_URL)=' ~/.hermes/.env
-# salida esperada: vacía
-```
-
-Según la [docu](https://hermes-agent.nousresearch.com/docs/user-guide/features/browser), si están definidas, Browserbase tiene prioridad sobre todas; Browser Use, sobre Firecrawl; etc. Sin ninguna de ellas, Hermes usa la instalación local que acabas de instalar.
-
-#### 9.4.4. Consideraciones de recursos en CX32
-
-- Chromium pesa ~200 MB en disco.
-- Cada contexto de navegador consume **100–200 MB de RAM**.
-- Si Hermes spawne 3 subagentes paralelos con browser, cuenta con ~600 MB extra de RAM ocupada.
-- En un CX32 (8 GB) cabe sin problema. Si vas con CX22 (4 GB), limita la concurrencia: en `delegation:` baja `max_concurrent_children: 1`.
-
-#### 9.4.5. Importante: si ejecutas Hermes con `terminal.backend: docker`
-
-Aquí la documentación oficial deja un matiz importante:
-
-- el **default** de Hermes para `terminal.backend: docker` es `nikolaik/python-nodejs:python3.11-nodejs20`
-- pero la **imagen oficial de Hermes** (`nousresearch/hermes-agent`) ya trae Python, Node, npm, Playwright con Chromium, `ripgrep` y `ffmpeg`
-
-Para esta guía, donde quieres un sandbox **genérico**, útil para código y compatible con browser tools sin pelearte con dependencias extra, la opción más razonable es usar **la imagen oficial de Hermes** dentro del backend Docker.
-
-### Opción recomendada para esta guía
-
-```bash
-hermes config set terminal.docker_image nousresearch/hermes-agent:latest
-```
-
-> **Por qué recomiendo esta opción:** es la más alineada con la doc oficial cuando quieres navegador + utilidades típicas dentro del contenedor. Sigue siendo una imagen generalista válida para prototipos, scripts Python, Node, `ripgrep`, `ffmpeg` y automatización web, sin tener que construir una imagen custom desde el día uno.
-
-> **Trade-off:** pesa más que `nikolaik/python-nodejs:python3.11-nodejs20`, porque ya incluye Playwright y Chromium. Si fueras a usar Hermes solo para código y terminal, sin browser, el default `nikolaik/...` es más ligero. Pero para este tutorial compensa priorizar compatibilidad y menos fricción.
-
-### Alternativa si quieres mantener la imagen por defecto
-
-Si decides conservar `nikolaik/python-nodejs:python3.11-nodejs20`, entonces el navegador no vive dentro del contenedor y tienes que apoyarte en el host.
-
-**Opción A (más simple):** que el navegador viva en el host y Hermes lo invoque desde dentro del contenedor mediante CDP. En `~/.hermes/.env`:
-
-```bash
-BROWSER_CDP_URL=ws://host.docker.internal:9222
-```
-
-Y arranca Chromium una vez en el host (lo gestiona `agent-browser` automáticamente cuando se llama).
+> En otras palabras: **browser automation queda como próximo paso**, no como requisito para dar por buena esta instalación de Hermes en Hetzner.
 
 ---
 
@@ -1461,21 +1378,21 @@ Esto no contradice la recomendación de Hermes de usar `systemd` en un host head
 
 A los pocos segundos el bot aparece online en tu servidor. Pruébalo:
 
-> @Hermes Lab hola, dime tu modelo actual
+> @hermes-agent hola, dime tu modelo actual
 
 Debería responder y, si miras los logs (`hermes logs gateway`), verás los eventos.
 
 📸 [images/13-discord-first-message.png]
 
-### 10.6. Prueba rápida del navegador desde Discord
+### 10.6. Nota sobre browser automation
 
-Una vez que el gateway ya esté arriba y el browser toolset configurado, puedes hacer una prueba más real:
+En esta guía hemos dejado **browser automation como siguiente iteración**, no como parte validada del setup base. Por tanto, en esta fase céntrate en comprobar:
 
-```text
-@Hermes Lab abre https://news.ycombinator.com y dame los 5 títulos más votados de la portada
-```
+- que el bot responde en Discord
+- que usa el modelo correcto
+- que el gateway arranca y se mantiene estable
 
-Si la primera vez tarda ~10 s extra es Chromium calentando. Las siguientes son inmediatas mientras la sesión esté viva (`inactivity_timeout: 300`).
+Si más adelante quieres validar navegación real con navegador, `agent-browser` / CDP / proveedor cloud queda como ampliación posterior.
 
 > Cuando confirmes que funciona, **ctrl+C**: lo convertiremos en servicio en el paso 13.
 
@@ -1894,7 +1811,7 @@ hermes cron add "0 21 * * *" \
 ## 16. Flujo completo de ejemplo: de idea en Discord a prototipo desplegado
 
 **Tú (Discord, DM o canal con @mención):**
-> @Hermes Lab quiero un acortador de URLs minimalista en Go con SQLite, dashboard en /admin protegido por basic auth, métricas en /metrics y desplegado en `urls.lab.midominio.com`. Slug: `urlshort`.
+> @hermes-agent quiero un acortador de URLs minimalista en Go con SQLite, dashboard en /admin protegido por basic auth, métricas en /metrics y desplegado en `urls.lab.midominio.com`. Slug: `urlshort`.
 
 **Lo que ocurre por dentro:**
 
@@ -1998,7 +1915,7 @@ az containerapp up \
 ### 18.5. Pide a Hermes que migre
 
 ```
-@Hermes Lab migra urlshort a Cloud Run en europe-west1, configura el secreto DB_URL desde Secret Manager, y dame el nuevo dominio.
+@hermes-agent migra urlshort a Cloud Run en europe-west1, configura el secreto DB_URL desde Secret Manager, y dame el nuevo dominio.
 ```
 
 ---
@@ -2049,7 +1966,7 @@ Lista de imágenes a poner en `images/` (si me das el archivo, lo enlazo):
 ### 20.3. Pídeselo a Hermes
 
 ```
-@Hermes Lab lee este repo y /home/hermes/projects/* y escribe un artículo Medium llamado
+@hermes-agent lee este repo y /home/hermes/projects/* y escribe un artículo Medium llamado
 "Cómo monté un laboratorio de prototipos con Hermes Agent en Hetzner por 7€/mes"
 siguiendo /home/hermes/lab/templates/article.md, en español, tono first-person técnico,
 unos 1800 palabras, con bloques de código copiables y referencias a la docu oficial.
