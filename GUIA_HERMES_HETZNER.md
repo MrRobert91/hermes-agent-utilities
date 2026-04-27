@@ -650,10 +650,10 @@ Cuando acabe la instalación base y aparezca el configurador:
 1. Elige **`Quick setup`**.
 2. En proveedor, elige **`OpenRouter`**.
 3. Pega tu API key de OpenRouter (`sk-or-v1-...`).
-4. Si te pide elegir modelo, selecciona uno válido con contexto amplio. Para arrancar, `deepseek/deepseek-v4-pro` es una base razonable y luego lo afinamos en la sección 8.
+4. Si te pide elegir modelo, selecciona **`qwen/qwen3.6-plus`**.
 5. Cuando pregunte si quieres conectar una plataforma de mensajería (`Connect a messaging platform?`), **de momento sáltalo**: deja la selección en `Skip` o confirma sin seleccionar ninguna plataforma. La idea en esta primera pasada es **no configurar todavía el gateway** y comprobar antes que Hermes base funciona bien en CLI.
 
-> El gateway de Discord lo configuraremos después, en el paso 10. Primero validamos instalación, PATH, proveedor, API key y respuesta del modelo en local.
+> **Por qué no dejamos DeepSeek V4 Pro como ruta principal en esta guía:** durante las pruebas reales en este VPS nos encontramos varios `HTTP 429` causados por saturación o degradación del upstream provider en OpenRouter. Para que el tutorial sea reproducible y estable, la configuración final se basa en `qwen/qwen3.6-plus` + `minimax/minimax-m2.7`, que en nuestras pruebas se comportó mejor.
 
 > Según el flujo actual de Hermes, `Quick setup` usa el mismo selector de proveedor/modelo que `hermes model`, pero **omite** partes más largas del `Full setup`, como rotación de credenciales y configuración adicional de visión/TTS. Si más adelante quieres la configuración completa, ejecuta `hermes setup`.
 
@@ -666,10 +666,7 @@ source ~/.bashrc
 hermes --version
 ```
 
-Por qué:
-
-- `source ~/.bashrc` recarga el `PATH` por si el instalador acaba de añadir `~/.local/bin`.
-- `hermes --version` verifica que el comando ya es resoluble desde tu sesión actual.
+`source ~/.bashrc` recarga el `PATH` por si el instalador acaba de añadir `~/.local/bin`, y `hermes --version` confirma que el comando ya es resoluble desde tu sesión actual.
 
 > Si `source ~/.bashrc` da algún error raro de permisos, abre una sesión SSH nueva como `hermes` y vuelve a probar `hermes --version`. La propia FAQ de Hermes contempla ese caso.
 
@@ -695,7 +692,7 @@ hermes doctor
 
 ## 7. Configurar OpenRouter como proveedor
 
-> Si en el paso 6 ya hiciste `Quick setup` → `OpenRouter` y pegaste la API key, **OpenRouter ya ha quedado configurado**. Esta sección se mantiene porque sirve para verificarlo, rehacerlo si algo falló o documentar la ruta manual.
+> Si en el paso 6 ya hiciste `Quick setup` → `OpenRouter` y pegaste la API key, esta sección te sirve sobre todo para **verificar** que quedó bien guardada.
 
 ### 7.1. Saca una API key de OpenRouter
 
@@ -719,7 +716,7 @@ hermes config set OPENROUTER_API_KEY sk-or-v1-XXXXXXXXXXXXXXXXXXXXXXXX
 
 #### Verificación importante: confirma que de verdad quedó guardada
 
-En algunas instalaciones conviene **comprobarlo explícitamente** después del wizard:
+Compruébalo explícitamente después del wizard:
 
 ```bash
 grep '^OPENROUTER_API_KEY=' ~/.hermes/.env
@@ -741,13 +738,13 @@ hermes config set OPENROUTER_API_KEY sk-or-v1-XXXXXXXXXXXXXXXXXXXXXXXX
 
 ### 7.3. Selecciona el proveedor
 
-Si ya lo elegiste durante `Quick setup`, usa este comando solo para comprobar o cambiar la selección:
+Si quieres comprobar la selección actual:
 
 ```bash
 hermes model
 ```
 
-Elige `openrouter` y, como modelo principal, `deepseek/deepseek-v4-pro`. (En el siguiente paso afinaremos el resto de roles con `hermes config set`).
+Elige `openrouter` y, como modelo principal, `qwen/qwen3.6-plus`. En el siguiente paso afinaremos el resto de roles con `hermes config set`.
 
 ---
 
@@ -762,85 +759,43 @@ Después del `Quick setup`, Hermes ya tiene un **modelo principal**. Pero eso **
 - **`fallback_model`**: modelo de respaldo si el principal falla por rate limit o caída del proveedor.
 - **`agent.reasoning_effort`**: intensidad de razonamiento; no es otro modelo, es un ajuste del agente.
 
-En este tutorial vamos a dejarlo así, todo sobre OpenRouter:
+En esta guía lo vamos a dejar así, todo sobre OpenRouter:
 
 | Uso | Configuración |
 |-----|---------------|
-| **Modelo principal** | `deepseek/deepseek-v4-pro` |
-| **Delegation** | `deepseek/deepseek-v4-flash` |
+| **Modelo principal** | `qwen/qwen3.6-plus` |
+| **Delegation** | `minimax/minimax-m2.7` |
 | **Auxiliary vision** | `google/gemini-3-flash-preview` |
-| **Auxiliary compression** | `deepseek/deepseek-v4-flash` **o** dejar `auto` |
-| **Fallback model** | `deepseek/deepseek-v4-flash` |
+| **Auxiliary compression** | `qwen/qwen3.6-plus` |
+| **Fallback model** | `minimax/minimax-m2.7` |
 | **Reasoning effort** | `medium` (recomendado) o `high` |
 
-> **Recomendación práctica para empezar:** usa `medium`. Sube a `high` solo si ves que en tareas complejas Hermes se queda corto y te compensa pagar algo más de latencia y tokens.
-
-> **Nota práctica si vas a usar Hermes sobre todo desde Discord:** el combo `deepseek/deepseek-v4-pro` + `deepseek/deepseek-v4-flash` funciona bien como punto de partida, pero si el upstream provider de OpenRouter para `v4-pro` se satura o degrada, puedes empezar a ver `HTTP 429` aunque tu key y tu VPS estén bien. En ese caso conviene cambiar temporalmente el modelo principal del bot a otro más estable.
+> Usa `medium` como valor por defecto. Sube a `high` solo si ves que en tareas complejas Hermes se queda corto.
 
 ### 8.1. Configúralo con `hermes config set`
 
 No hace falta abrir el YAML a mano. Como usuario `hermes`, ejecuta:
 
 ```bash
-hermes config set model.default deepseek/deepseek-v4-pro
-
-hermes config set delegation.provider openrouter
-hermes config set delegation.model deepseek/deepseek-v4-flash
-
-hermes config set auxiliary.vision.provider openrouter
-hermes config set auxiliary.vision.model google/gemini-3-flash-preview
-
-hermes config set fallback_model.provider openrouter
-hermes config set fallback_model.model deepseek/deepseek-v4-flash
-
-hermes config set agent.reasoning_effort medium
-hermes config set display.personality technical
-hermes config set display.show_reasoning true
-
-hermes config set auxiliary.compression.provider openrouter
-hermes config set auxiliary.compression.model deepseek/deepseek-v4-flash
-```
-
-### 8.1.1. Bloque final recomendado para Discord si DeepSeek V4 Pro se satura
-
-Si ves errores como estos:
-
-```text
-⚠️ Rate limited — switching to fallback provider...
-❌ Rate limited after 3 retries — HTTP 429: Provider returned error
-```
-
-y en OpenRouter ves que el uptime/health de `deepseek-v4-pro` ha caído, una combinación más robusta para el bot de Discord es:
-
-- **principal**: `qwen/qwen3.6-plus`
-- **fallback**: `minimax/minimax-m2.7`
-- **delegation**: `minimax/minimax-m2.7`
-- **compression**: `qwen/qwen3.6-plus`
-- **vision**: `google/gemini-3-flash-preview`
-
-Bloque listo para copiar:
-
-```bash
 hermes config set model.provider openrouter
 hermes config set model.default qwen/qwen3.6-plus
-
-hermes config set fallback_model.provider openrouter
-hermes config set fallback_model.model minimax/minimax-m2.7
 
 hermes config set delegation.provider openrouter
 hermes config set delegation.model minimax/minimax-m2.7
 
-hermes config set auxiliary.compression.provider openrouter
-hermes config set auxiliary.compression.model qwen/qwen3.6-plus
-
 hermes config set auxiliary.vision.provider openrouter
 hermes config set auxiliary.vision.model google/gemini-3-flash-preview
+
+hermes config set fallback_model.provider openrouter
+hermes config set fallback_model.model minimax/minimax-m2.7
 
 hermes config set agent.reasoning_effort medium
 hermes config set display.personality technical
 hermes config set display.show_reasoning true
-hermes config set timezone Europe/Madrid
 
+hermes config set auxiliary.compression.provider openrouter
+hermes config set auxiliary.compression.model qwen/qwen3.6-plus
+hermes config set timezone Europe/Madrid
 hermes config set provider_routing.sort throughput
 ```
 
@@ -860,7 +815,7 @@ grep -n "default:\\|delegation:\\|fallback_model:\\|reasoning_effort:\\|personal
 
 > **Qué está pasando en ese escenario:** normalmente no es un problema de timeout ni de tu VPS. OpenRouter balancea entre varios providers y, si el upstream del modelo elegido está saturado o degradado, puede devolverte `429` aunque todo lo local esté correcto. Por eso conviene tener un `fallback_model` real y, si hace falta, cambiar temporalmente el modelo principal del canal interactivo de Discord.
 >
-> También conviene que el **modelo de compresión** tenga una ventana de contexto grande. Si usas un compresor con menos contexto que el umbral de compresión del modelo principal, Hermes bajará el threshold de esa sesión para que quepa. Por eso, en este bloque final, dejamos `qwen/qwen3.6-plus` también en compresión.
+> También conviene que el **modelo de compresión** tenga una ventana de contexto grande. Si usas un compresor con menos contexto que el umbral de compresión del modelo principal, Hermes bajará el threshold de esa sesión para que quepa. Por eso dejamos `qwen/qwen3.6-plus` también en compresión.
 
 
 ### 8.2. Comprueba cómo ha quedado
@@ -937,8 +892,8 @@ Esto es lo que más confunde al principio:
 Desde CLI o desde Discord más adelante:
 
 ```text
-/model openrouter:deepseek/deepseek-v4-pro
-/model openrouter:deepseek/deepseek-v4-flash
+/model openrouter:qwen/qwen3.6-plus
+/model openrouter:minimax/minimax-m2.7
 ```
 
 Úsalo para pruebas puntuales. Para que el comportamiento estable sobreviva reinicios, deja la configuración persistida con `hermes config set`.
@@ -1346,7 +1301,7 @@ Los fallos más típicos aquí son:
 
 ### 9.3. Aprobaciones automáticas (modo off)
 
-Como **todos los comandos se ejecutan dentro del contenedor Docker** del paso 9.1 y el host está aislado, puedes apagar las aprobaciones por completo. Esto permite que Hermes trabaje 100 % desatendido desde Discord sin pedirte confirmación cuando lanza `npm install`, `docker compose up`, `git push`, etc.
+Como **todos los comandos se ejecutan dentro del contenedor Docker** del paso 9.1, puedes apagar las aprobaciones por completo. Esto permite que Hermes trabaje 100 % desatendido desde Discord sin pedirte confirmación cuando lanza `npm install`, `docker compose up`, `git push`, etc.
 
 ```bash
 hermes config set approvals.mode off
@@ -1358,7 +1313,8 @@ hermes config set security.tirith_fail_open true
 
 **Por qué es razonable hacerlo aquí:**
 
-- El sandbox Docker (`terminal.backend: docker`) impide tocar el host directamente.
+- El sandbox Docker (`terminal.backend: docker`) aísla a Hermes del sistema base del VPS.
+- Lo que sí podrá tocar son los directorios que tú montes dentro del contenedor, por ejemplo `/home/hermes/projects`, así que el aislamiento es **útil pero no absoluto**.
 - `tirith_enabled: true` aplica análisis estático antes de ejecutar y bloquea patrones obviamente destructivos (p.ej. `rm -rf /`).
 - `redact_secrets` enmascara `.env`, tokens y keys antes de enviar al LLM, así no se filtran al historial de OpenRouter.
 - `DISCORD_ALLOWED_USERS` ya restringe quién puede dar órdenes al agente.
@@ -1398,37 +1354,13 @@ Qué dejamos fuera de este walkthrough base:
 
 Sigue [docs/user-guide/messaging/discord](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/discord).
 
-Antes de entrar en clicks concretos, ayuda mucho entender **qué pinta cada apartado del portal de Discord**. Siguiendo el orden actual de la UI y la documentación oficial:
+En este tutorial solo vamos a tocar tres apartados del portal de Discord:
 
-- **Información general**: identidad básica de la app. Aquí ves `Application ID`, `Public Key`, nombre, icono, descripción y URLs como la `Interactions Endpoint URL`. Para Hermes por gateway, normalmente solo te importa el nombre, el icono y, como referencia, el `Application ID`. No necesitas montar `Interactions Endpoint URL` para el flujo de bot/gateway que usamos aquí.
-- **Instalaciones**: define **cómo** se instala tu app en Discord. Aquí eliges `Guild Install` y/o `User Install`, el tipo de enlace de instalación y los scopes/permisos por defecto. En la UI actual, este apartado es clave: aquí es donde realmente decides si tu bot se puede añadir a servidores, si será instalable por usuarios individuales y qué permisos pedirá al instalarse.
-  
-  Para **este caso concreto**, **no queremos que sea público** ni que otros usuarios puedan añadir la app a su cuenta y hablar con tu instancia de Hermes. La idea es que el bot viva solo en **tu servidor** y que, además, Hermes responda solo a los usuarios que tú autorices con `DISCORD_ALLOWED_USERS`.
-  
-  Configuración recomendada en **Instalación**:
-  
-  - **Instalación de usuarios**: **OFF**
-  - **Instalación de servidor**: **ON**
-  - **Enlace de instalación**: puedes dejar **Enlace proporcionado por Discord** como referencia visual, pero **no será el método que usaremos para invitar el bot** si `Public Bot = OFF`
-  - **Ajustes de instalación predeterminados → Instalación de usuarios**: no usar / dejar desactivado
-  - **Ajustes de instalación predeterminados → Instalación de servidor**: opcional como referencia, pero en este caso mandará la **Manual URL** del paso 10.2
-  
-  Con esto consigues dos cosas:
-  
-  - evitas que la app quede disponible como instalación personal tipo “añadir a mis apps”
-  - fuerzas un flujo controlado donde solo tú la instalas en tu propio servidor
-- **OAuth2**: ajustes de autorización más avanzados. Sirve para flujos OAuth clásicos, URLs de redirect, scopes de login y casos donde tu app necesita actuar en nombre de un usuario o conectar cuentas externas. Para este tutorial de Hermes no es el centro del flujo. De hecho, dejamos `Requires OAuth2 Code Grant` apagado y evitamos complicarlo.
-- **Bot**: configuración del usuario bot. Aquí están el token, `Public Bot`, `Requires OAuth2 Code Grant`, los privileged intents y la calculadora de permisos. Para Hermes este apartado sí es crítico porque de aquí salen el token y el `Message Content Intent`.
-- **Emojis**: gestiona emojis propios de la aplicación. Discord permite subir emojis de app para usarlos como recursos visuales. No es necesario para Hermes.
-- **Webhooks**: sirve para dos familias distintas: webhooks entrantes para publicar mensajes en canales y event webhooks para que Discord te envíe eventos HTTP. Para este tutorial no lo usamos porque Hermes se conecta como bot por gateway, no por webhook.
-- **Rich Presence**: pensado sobre todo para juegos, Activities y experiencias sociales que muestran actividad viva en el perfil del usuario. No es necesario para Hermes como asistente de Discord.
-- **Testers de la aplicación**: permite dar acceso controlado a testers en flujos donde la app necesita pruebas cerradas, especialmente para Activities u otras experiencias más distribuidas. Para un bot privado de Hermes no suele hacer falta.
-- **Verificación de la aplicación**: entra en juego cuando tu app crece, pide permisos sensibles a escala o necesitas revisión de Discord. Para un bot personal en pocos servidores no suele ser un paso inmediato, pero conviene saber que existe si superas ciertos umbrales o quieres operar con más visibilidad.
+- `Información general`: para sacar el `Application ID` y dar nombre/icono a la app
+- `Instalaciones`: para controlar cómo invitas el bot a tu servidor
+- `Bot`: para sacar el token, definir privacidad e intents
 
-Resumen práctico para este caso:
-
-- **tocamos de verdad**: `Información general`, `Instalaciones` y `Bot`
-- **podemos ignorar de momento**: `OAuth2`, `Emojis`, `Webhooks`, `Rich Presence`, `Testers de la aplicación`, `Verificación de la aplicación`
+El resto (`OAuth2`, `Emojis`, `Webhooks`, `Rich Presence`, `Testers`, `Verificación`) no lo necesitamos para este flujo.
 
 ### 10.1. Crea la app y el bot
 
@@ -1519,20 +1451,12 @@ Abre la URL manual en tu navegador, elige tu servidor y autoriza la instalación
 >
 > Con eso reduces al mínimo la superficie de exposición y evitas que otros usuarios instalen o distribuyan tu bot fuera de tu entorno controlado.
 
-> **Resumen del cambio importante en la documentación actual de Discord:** antes mucha gente configuraba scopes y permisos pensando en OAuth2 clásico o mirando solo la pestaña **Bot**. Ahora, con la UI moderna, lo correcto para este caso es:
->
-> - **Bot**: token + intents + privacidad del bot
-> - **Installation**: contexts + install link + scopes + permisos efectivos de instalación
->
-> Pero en **tu caso privado**, con `Public Bot: OFF`, la invitación real se hace con la **Manual URL** de arriba, no con el enlace autogenerado de Discord.
-
 ### 10.3. Saca tu Discord User ID
 
 Discord → **Settings → Advanced → Developer Mode ON** → click derecho sobre tu nombre → **Copy User ID**.
 
 ### 10.4. Configura Hermes
 
-Opción interactiva:
 ```bash
 hermes gateway setup
 ```
@@ -1552,16 +1476,7 @@ Después de marcar `Discord` correctamente, el asistente te pedirá:
 
 Si ya saliste del wizard inicial sin configurarlo, no pasa nada: vuelve al prompt y ejecuta otra vez `hermes gateway setup`.
 
-> Este comando se ejecuta **desde tu shell del VPS**, no desde dentro de una conversación interactiva de `hermes`. Si estás dentro de la interfaz de chat, sal con `Ctrl+C` y luego lánzalo desde el prompt normal.
-
-Opción manual (`~/.hermes/.env`, `chmod 600`):
-```
-DISCORD_BOT_TOKEN=MTAwOTk...tu-token-completo
-DISCORD_ALLOWED_USERS=284102345871466496
-DISCORD_HOME_CHANNEL=123456789012345678
-DISCORD_REQUIRE_MENTION=true
-DISCORD_AUTO_THREAD=true
-```
+> Este comando se ejecuta **desde tu shell del VPS**, no desde dentro de una conversación interactiva de `hermes`.
 
 Bloque final recomendado para **este tutorial** (bot privado, un único operador, servidor propio):
 
@@ -1584,18 +1499,7 @@ Qué significa cada línea:
 - `DISCORD_REACTIONS=true`: Hermes usa reacciones emoji de estado cuando corresponde
 
 > Si todavía no tienes claro qué canal usar como `DISCORD_HOME_CHANNEL`, puedes dejar esa línea fuera al principio y fijarlo después desde Discord con `/sethome`.
-
-(Opcional, en `config.yaml`):
-```yaml
-discord:
-  require_mention: true
-  free_response_channels: ""        # canales donde responde sin @mención
-  auto_thread: true
-group_sessions_per_user: true       # cada usuario tiene su contexto en canales compartidos
-unauthorized_dm_behavior: ignore    # ignore | pair
-```
-
-> `DISCORD_HOME_CHANNEL` es opcional. Según la doc oficial, sirve para que Hermes envíe allí salidas proactivas como cron jobs, recordatorios y notificaciones. También puedes fijarlo luego desde Discord con el comando `/sethome`.
+> `DISCORD_HOME_CHANNEL` es opcional. Sirve para cron, avisos y salidas proactivas. Si no lo defines ahora, puedes fijarlo después con `/sethome`.
 
 ### 10.5. Lanza el gateway
 
@@ -1748,10 +1652,24 @@ Esta carpeta contiene varios proyectos independientes.
   - "URL Shortener" -> `url-shortener`
 
 ## GitHub
-- Cada proyecto puede tener su propio repositorio remoto.
+- Cada proyecto debe tener su propio repositorio remoto.
 - Si hay dudas sobre qué repo corresponde al proyecto, inspecciona `git remote -v` dentro de la carpeta del proyecto.
 EOF
 ```
+
+Si ese comando te da `Permission denied`, normalmente significa que `/home/hermes/projects` se creó antes como `root`. Compruébalo así:
+
+```bash
+ls -ld /home/hermes /home/hermes/projects
+```
+
+Si `projects` pertenece a `root`, corrígelo una vez:
+
+```bash
+sudo chown -R hermes:hermes /home/hermes/projects
+```
+
+Y luego vuelve a ejecutar el `cat > /home/hermes/projects/AGENTS.md ...` ya **sin `sudo`**.
 
 > Ref:
 > [Context Files → `AGENTS.md`](https://hermes-agent.nousresearch.com/docs/user-guide/features/context-files)
@@ -1979,6 +1897,14 @@ Y evita también tener instalados a la vez el **user service** y el **system ser
 
 ### 13.5. Cómo acceder al dashboard desde tu portátil
 
+La documentación oficial de Hermes indica que el dashboard y su pestaña de chat requieren los extras `web,pty`. Si hiciste una instalación manual o una instalación mínima y `hermes dashboard` no arranca bien, instala esos extras antes de seguir:
+
+```bash
+pip install 'hermes-agent[web,pty]'
+```
+
+En nuestro caso el dashboard ya quedó disponible, así que el flujo operativo que sí hemos usado es este:
+
 Si ejecutas esto en el VPS:
 
 ```bash
@@ -2125,7 +2051,7 @@ docker compose ps
 
 ### 15.1. Plantilla de artículo
 
-```bash
+~~~bash
 mkdir -p /home/hermes/lab/templates
 cat > /home/hermes/lab/templates/article.md <<'EOF'
 # {{TITLE}}
@@ -2159,14 +2085,14 @@ graph LR
   B --> C[App]
 ```
 EOF
-```
+~~~
 
 ### 15.2. Prompt-system para artículos
 
 Añade un *personality* específico para que Hermes adopte tono de blog técnico:
 
 ```bash
-hermes config set personality.blog_writer "Eres un ingeniero de software senior que escribe en Medium. Tono claro, con código, sin filler. Estructura: problema → idea → implementación → demo → lo aprendido → próximos pasos."
+hermes config set agent.personalities.blog_writer "Eres un ingeniero de software senior que escribe en Medium. Tono claro, con código, sin filler. Estructura: problema → idea → implementación → demo → lo aprendido → próximos pasos."
 ```
 
 Uso desde Discord:
@@ -2195,8 +2121,8 @@ hermes cron add "0 21 * * *" \
 **Lo que ocurre por dentro:**
 
 1. **Gateway Discord** recibe el evento y abre la sesión usando `terminal.cwd=/workspace/projects` como raíz de trabajo.
-2. Hermes (DeepSeek V4 Pro) decide arquitectura, crea `/workspace/projects/urlshort/`.
-3. **Subagentes** (DeepSeek V4 Flash) en paralelo: scaffolding, tests, Dockerfile, docker-compose.
+2. Hermes (`qwen/qwen3.6-plus`) decide arquitectura, crea `/workspace/projects/urlshort/`.
+3. **Subagentes** (`minimax/minimax-m2.7`) en paralelo: scaffolding, tests, Dockerfile, docker-compose.
 4. Hermes hace `git init`, `go mod init`, escribe código, ejecuta `go test ./...` dentro del **contenedor sandbox**.
 5. Si los tests pasan, lanza `docker compose up -d --build`.
 6. Caddy detecta el nuevo contenedor, emite cert TLS, expone en `urls.lab.midominio.com`.
@@ -2216,8 +2142,8 @@ hermes cron add "0 21 * * *" \
 
 - ✅ SSH solo con clave, sin root, fail2ban activo.
 - ✅ UFW + Cloud Firewall (doble capa).
-- ✅ `terminal.backend: docker` para que Hermes nunca toque el host directamente.
-- ✅ `approvals.mode: smart` + `security.redact_secrets: true` + `tirith_enabled: true`.
+- ✅ `terminal.backend: docker` para aislar a Hermes del sistema base y limitarlo a lo que vea dentro del contenedor y de los volúmenes montados.
+- ✅ `approvals.mode: off` + `security.redact_secrets: true` + `tirith_enabled: true`.
 - ✅ `DISCORD_ALLOWED_USERS` siempre poblado (sin esto, el gateway deniega por defecto).
 - ✅ `chmod 600 ~/.hermes/.env`.
 - ✅ Backups diarios de Hetzner activos.
@@ -2243,8 +2169,8 @@ crontab -e
 | Riesgo | Mitigación |
 |--------|-----------|
 | Prompt injection desde Discord exfiltra .env | `DISCORD_ALLOWED_USERS` restringe quién habla; `redact_secrets` enmascara antes de enviar al modelo |
-| Costes OpenRouter desbocados | Hard limit en OpenRouter + alerta + `agent.max_turns` + delegation a flash |
-| Hermes ejecuta comando destructivo | Sandbox Docker + `approvals.mode: smart` |
+| Costes OpenRouter desbocados | Hard limit en OpenRouter + alerta + `agent.max_turns` + `fallback_model`/`delegation` más baratos |
+| Hermes ejecuta comando destructivo | Sandbox Docker + `approvals.mode: off` + mounts limitados + `tirith_enabled` |
 | Quedas sin disco con muchos proyectos | `docker system prune -a -f --filter "until=72h"` semanal + cron de aviso al 80% |
 | Bot token leakeado | Rotación inmediata desde Developer Portal; `hermes config rotate DISCORD_BOT_TOKEN` |
 | OpenRouter caído | `fallback_model` en config + `provider_routing.sort: throughput` |
@@ -2364,12 +2290,12 @@ Antes de declarar el laboratorio "listo":
 - [ ] Fail2ban activo.
 - [ ] Docker + Compose instalados, `docker run hello-world` OK.
 - [ ] Hermes Agent instalado (`hermes doctor` sin errores).
-- [ ] OpenRouter API key cargada y `hermes` responde con DeepSeek V4 Pro.
-- [ ] `terminal.backend: docker` activo, `approvals.mode: smart`.
+- [ ] OpenRouter API key cargada y `hermes` responde con `qwen/qwen3.6-plus`.
+- [ ] `terminal.backend: docker` activo, `terminal.cwd=/workspace/projects`, `approvals.mode: off`.
 - [ ] Discord bot creado, intents activados, `hermes gateway` responde.
 - [ ] `hermes-gateway.service` enable + running.
 - [ ] Caddy levantado en red `caddy_net`, dominio wildcard apuntando.
-- [ ] `/home/hermes/projects/` y plantillas creados.
+- [ ] `/home/hermes/projects/`, `AGENTS.md` global y plantillas creados.
 - [ ] Cron `maintenance-heartbeat` y `daily-article` registrados.
 - [ ] Backups Hetzner + restic offsite.
 - [ ] Límite de gasto en OpenRouter.
@@ -2407,10 +2333,10 @@ journalctl -u hermes-gateway -f
 | `hermes gateway` se cierra al cabo de 1 min | Token Discord rotado/expirado | Reset Token + actualizar `.env` |
 | Modelos lentísimos | `provider_routing.sort: throughput` no aplicado | Reinicia gateway tras editar `config.yaml` |
 | Error "context length exceeded" | Sesión enorme | `/compress` o `/new` desde Discord |
-| Costes disparados en OpenRouter | Sin delegation a flash | Confirma sección `delegation:` en config |
+| Costes disparados en OpenRouter | Modelo principal/fallback demasiado caros o sin `delegation` configurado | Revisa `model.default`, `fallback_model` y `delegation` |
 | `docker compose up` falla con permiso denegado | Usuario no en grupo docker | `sudo usermod -aG docker hermes` y relogin |
 | Caddy no emite certificado | DNS aún no propagado o puerto 80 bloqueado | `dig <slug>.lab.dom +short`, revisa firewall |
-| Hermes pide aprobaciones constantes | `approvals.mode: manual` | Cambia a `smart` |
+| Hermes pide aprobaciones constantes | `approvals.mode: manual` | Cámbialo a `off` si mantienes el flujo de esta guía |
 
 ## Apéndice C: referencias oficiales
 
@@ -2423,7 +2349,8 @@ journalctl -u hermes-gateway -f
 - **FAQ:** <https://hermes-agent.nousresearch.com/docs/reference/faq>
 - **Repo + ejemplo de config:** <https://github.com/NousResearch/hermes-agent>
 - **OpenRouter:** <https://openrouter.ai/docs>
-- **DeepSeek V4 Pro:** <https://openrouter.ai/deepseek/deepseek-v4-pro>
+- **Qwen 3.6 Plus:** <https://openrouter.ai/qwen/qwen3.6-plus>
+- **MiniMax M2.7:** <https://openrouter.ai/minimax/minimax-m2.7>
 - **Hetzner Cloud:** <https://docs.hetzner.com/cloud/>
 
 ---
