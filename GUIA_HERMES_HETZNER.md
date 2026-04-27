@@ -937,6 +937,9 @@ hermes config set code_execution.max_tool_calls 50
 >
 > porque la documentación oficial recomienda un **host-visible export mount** cuando usas mensajería + backend Docker. Así, si Hermes genera un archivo dentro del contenedor, puede escribirlo en `/output/...` y luego el gateway del host lo ve en `/home/hermes/.hermes/cache/documents/...` para enviarlo por Discord, Telegram, etc.
 >
+> **Ojo con las expectativas:** este mount es necesario, pero no convierte el flujo de adjuntos en algo perfecto cuando separas **gateway en host** y **ejecucion en sandbox Docker**. **De momento es una limitacion conocida de Hermes**: el puente de ficheros entre entornos sandboxed y usuarios finales todavia tiene huecos, asi que puedes encontrarte casos donde un archivo generado dentro del sandbox no salga bien por Discord/Telegram, o donde un adjunto recibido por mensajeria no quede accesible dentro de la sesion de ejecucion. Issue oficial:
+> <https://github.com/NousResearch/hermes-agent/issues/466>
+>
 > Dejamos `terminal.container_cpu: 2` y `terminal.container_memory: 4096` porque en este tutorial estamos usando un **Hetzner CX32** (4 vCPU, 8 GB RAM). Reservar **2 vCPU y 4 GB** para el sandbox Docker es un punto medio razonable: da margen suficiente para `npm`, `python`, builds, tests y browser tools sin comerse todos los recursos del VPS ni dejar sin aire al propio Hermes, al gateway y al sistema base.
 
 ```yaml
@@ -1425,6 +1428,9 @@ Estos son los permisos **mínimos/útiles** que Hermes recomienda para Discord:
 - **Add Reactions** — poner reacciones de estado (👀, ✅, ❌)
 
 > Como `DISCORD_AUTO_THREAD=true` y `DISCORD_REACTIONS=true` son defaults importantes en Hermes, para esta guía recomiendo directamente el set **recommended** de la documentación oficial, no el mínimo.
+
+> **Nota práctica sobre adjuntos:** aunque des el permiso **Attach Files**, con `terminal.backend: docker` puede haber fallos al mandar o leer archivos en Discord y Telegram porque el gateway y el sandbox no comparten exactamente la misma vista del filesystem. **De momento es una limitacion conocida de Hermes** en entornos sandboxed:
+> <https://github.com/NousResearch/hermes-agent/issues/466>
 
 #### Enteros de permisos útiles
 
