@@ -1589,8 +1589,6 @@ Y poner un `AGENTS.md` global en esa raíz para explicarle a Hermes cómo debe c
 
 ```bash
 mkdir -p /home/hermes/projects
-mkdir -p /home/hermes/lab/templates
-mkdir -p /home/hermes/lab/articles
 ```
 
 Estructura recomendada por proyecto:
@@ -1695,80 +1693,29 @@ Quiero trabajar en el proyecto Cuentee. Su carpeta es /workspace/projects/cuente
 
 Así no aíslas la memoria global de Hermes, pero sí le das una convención clara para centrarse en un único repo por sesión.
 
-Crea una **plantilla cookiecutter-style** que el agente clonará al iniciar cada proyecto:
-
-```bash
-mkdir -p /home/hermes/lab/templates/web-app
-cat > /home/hermes/lab/templates/web-app/docker-compose.yml <<'EOF'
-services:
-  app:
-    build: .
-    restart: unless-stopped
-    networks: [caddy_net]
-    labels:
-      caddy: "{{SLUG}}.{{DOMAIN}}"
-      caddy.reverse_proxy: "{{HOSTNAME}} {{PORT}}"
-
-networks:
-  caddy_net:
-    external: true
-EOF
-```
-
-(Ajusta cuando definamos Caddy en el paso 14.)
 
 ---
 
-## 12. Heartbeats, cron y ejecución desatendida
+## 12. Cron diario de resumen por proyecto
 
-Hermes tiene **cron scheduler integrado** para ejecutar prompts en background y entregar resultados a cualquier plataforma (Discord, Telegram, archivo, etc.).
-
-### 12.1. Crear un job programado
-
-```bash
-hermes cron add "every 6 hours" \
-  --prompt "Revisa /home/hermes/projects, cierra TODOs completados, actualiza README de cada proyecto y manda un resumen al canal #lab-status de Discord." \
-  --deliver discord:#lab-status \
-  --name maintenance-heartbeat
-```
-
-Otro ejemplo (artículo diario):
+Hermes tiene **cron scheduler integrado** para ejecutar prompts en background. En este tutorial solo vamos a dejar un job simple: **una vez cada 24 horas**, Hermes revisa los proyectos y te manda un resumen breve de los cambios detectados.
 
 ```bash
 hermes cron add "0 22 * * *" \
-  --prompt "Elige el proyecto con más cambios hoy y redacta un borrador de artículo Medium en su ARTICLE.md siguiendo el template /home/hermes/lab/templates/article.md" \
-  --name daily-article
+  --prompt "Revisa /workspace/projects. Para cada proyecto con cambios recientes, redacta un resumen breve de lo hecho hoy: archivos o áreas tocadas, objetivo del cambio, estado actual y siguiente paso recomendado. Entrega el resultado en formato lista, agrupado por proyecto." \
+  --deliver discord:#lab-status \
+  --name daily-project-summary
 ```
 
 Lista y gestiona:
 
 ```bash
 hermes cron list
-hermes cron disable maintenance-heartbeat
-hermes cron tick   # forzar una ejecución manual para testear
+hermes cron disable daily-project-summary
+hermes cron tick   # forzar una ejecución manual para probarlo
 ```
 
 > Refs: cron / scheduler en [docs/user-guide/configuration](https://hermes-agent.nousresearch.com/docs/user-guide/configuration/) y [docs/reference/cli-commands](https://hermes-agent.nousresearch.com/docs/reference/cli-commands).
-
-### 12.2. Heartbeat manual con `quick_commands`
-
-Para checks instantáneos sin gastar tokens:
-
-```yaml
-# en ~/.hermes/config.yaml
-quick_commands:
-  status:
-    type: exec
-    command: "systemctl status hermes-gateway --no-pager | head -20"
-  disk:
-    type: exec
-    command: "df -h /"
-  containers:
-    type: exec
-    command: "docker ps --format '{{.Names}}\t{{.Status}}'"
-```
-
-Desde Discord: `/status`, `/disk`, `/containers` se resuelven sin llamar al modelo.
 
 ---
 
@@ -2055,15 +2002,15 @@ docker compose ps
 
 ## 15. Documentación y artículos automáticos por proyecto
 
-### 15.1. Plantilla de artículo
+### 15.1. Estructura recomendada del artículo
 
-~~~bash
-mkdir -p /home/hermes/lab/templates
-cat > /home/hermes/lab/templates/article.md <<'EOF'
-# {{TITLE}}
+En vez de guardar plantillas globales fuera de los repos, en esta guía cada proyecto mantiene su propio `ARTICLE.md` dentro del repo. La estructura mínima que le pedimos a Hermes es esta:
+
+```md
+# Título del proyecto o del experimento
 
 > Tags: #ai #docker #hermes #lab
-> Generado el {{DATE}} por Hermes Agent
+> Generado el YYYY-MM-DD por Hermes Agent
 
 ## Problema
 
@@ -2075,23 +2022,10 @@ cat > /home/hermes/lab/templates/article.md <<'EOF'
 
 ## Demo
 
-```bash
-# comandos para reproducirlo
-```
-
 ## Lo que aprendí
 
 ## Próximos pasos
-
-## Apéndice: arquitectura
-
-```mermaid
-graph LR
-  A[Cliente] --> B[Caddy]
-  B --> C[App]
 ```
-EOF
-~~~
 
 ### 15.2. Prompt-system para artículos
 
@@ -2104,7 +2038,7 @@ hermes config set agent.personalities.blog_writer "Eres un ingeniero de software
 Uso desde Discord:
 ```
 /personality blog_writer
-@Hermes lee /workspace/projects/url-shortener y escribe ARTICLE.md siguiendo /workspace/lab/templates/article.md
+@hermes-agent lee /workspace/projects/url-shortener y escribe o actualiza ARTICLE.md dentro de ese repo con la estructura: problema, idea, stack y decisiones técnicas, cómo lo construí, demo, lo que aprendí y próximos pasos.
 ```
 
 ### 15.3. README auto-generado
@@ -2136,7 +2070,7 @@ hermes cron add "0 21 * * *" \
 
    > ✅ Desplegado. https://urls.lab.midominio.com — admin /admin (user: admin, pass guardado en .env). Tests 14/14 pasan. README + ARTICLE escritos.
 
-8. El cron `daily-article` (22:00) detectará el proyecto reciente, escribirá `ARTICLE.md` con el template y te enviará el borrador a `#lab-status`.
+8. El cron `daily-project-summary` (22:00) revisará los proyectos y te enviará a `#lab-status` un resumen breve de los cambios hechos en cada uno.
 
 📸 [images/16-flow-end-to-end.png]
 
@@ -2277,12 +2211,11 @@ Lista de imágenes a poner en `images/` (si me das el archivo, lo enlazo):
 ### 20.3. Pídeselo a Hermes
 
 ```
-@hermes-agent lee este repo y /home/hermes/projects/* y escribe un artículo Medium llamado
-"Cómo monté un laboratorio de prototipos con Hermes Agent en Hetzner por 7€/mes"
-siguiendo /home/hermes/lab/templates/article.md, en español, tono first-person técnico,
-unos 1800 palabras, con bloques de código copiables y referencias a la docu oficial.
-Guárdalo en /home/hermes/lab/articles/medium-hermes-hetzner.md
-```
+@hermes-agent lee este repo y escribe o actualiza su ARTICLE.md con un artículo Medium llamado
+"Cómo monté un laboratorio de prototipos con Hermes Agent en Hetzner por 7€/mes",
+en español, tono first-person técnico, unas 1800 palabras, con bloques de código copiables
+y referencias a la documentación oficial.
+``` 
 
 ---
 
@@ -2301,13 +2234,13 @@ Antes de declarar el laboratorio "listo":
 - [ ] Discord bot creado, intents activados, `hermes gateway` responde.
 - [ ] `hermes-gateway.service` enable + running.
 - [ ] Caddy levantado en red `caddy_net`, dominio wildcard apuntando.
-- [ ] `/home/hermes/projects/`, `AGENTS.md` global y plantillas creados.
-- [ ] Cron `maintenance-heartbeat` y `daily-article` registrados.
+- [ ] `/home/hermes/projects/` y `AGENTS.md` global creados.
+- [ ] Cron `daily-project-summary` registrado y probado.
 - [ ] Backups Hetzner + restic offsite.
 - [ ] Límite de gasto en OpenRouter.
 - [ ] Primer prototipo end-to-end (paso 16) probado.
 - [ ] Captura de pantallas en `images/`.
-- [ ] Borrador de artículo Medium en `/home/hermes/lab/articles/`.
+- [ ] Cada repo puede generar o mantener su propio `ARTICLE.md`.
 
 ---
 
