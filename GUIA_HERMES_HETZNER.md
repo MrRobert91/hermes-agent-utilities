@@ -1700,6 +1700,8 @@ Quiero trabajar en el proyecto Cuentee. Su carpeta es /workspace/projects/cuente
 
 Así no aíslas la memoria global de Hermes, pero sí le das una convención clara para centrarse en un único repo por sesión.
 
+> **Nota:** `/title Cuentee` no cambia ninguna ruta ni configuración; solo pone un nombre humano a la sesión actual para poder recuperarla luego con `/resume Cuentee` o localizarla más fácilmente en `hermes sessions list`. Es útil para mantener una sesión por proyecto sin separar la memoria global de Hermes.
+
 
 ---
 
