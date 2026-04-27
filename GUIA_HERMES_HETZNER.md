@@ -78,8 +78,8 @@ Guía paso a paso para desplegar [Hermes Agent](https://github.com/NousResearch/
 │                                                             │
 │   ┌──────────────────────────────────────────────────┐      │
 │   │  Caddy (reverse proxy + HTTPS automático)        │      │
-│   │  proyecto-a.tu-dominio.com → contenedor A:8080   │      │
-│   │  proyecto-b.tu-dominio.com → contenedor B:3000   │      │
+│   │  proyecto-a.lab.rustyroboz.com → contenedor A:8080 │    │
+│   │  proyecto-b.lab.rustyroboz.com → contenedor B:3000 │    │
 │   └──────────────────────────────────────────────────┘      │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -419,7 +419,7 @@ Es habitual asumir que cada servicio que usa el VPS necesita un puerto abierto. 
 | Servicio | Tipo | ¿Puerto en tu firewall? |
 | -------- | ---- | ----------------------- |
 | Tú haciendo SSH al VPS | Entrante (tú → VPS, puerto 22) | **Sí: 22** |
-| Tú abriendo `https://miprototipo.lab.dom` en el navegador | Entrante (visitante → Caddy, puertos 80/443) | **Sí: 80 y 443** |
+| Tú abriendo `https://miprototipo.lab.rustyroboz.com` en el navegador | Entrante (visitante → Caddy, puertos 80/443) | **Sí: 80 y 443** |
 | Hermes hablando con Discord (recibiendo y enviando mensajes) | **Saliente** (VPS → `gateway.discord.gg:443` por WebSocket) | **No** |
 | Hermes llamando a OpenRouter | Saliente (VPS → `openrouter.ai:443`) | **No** |
 | Hermes haciendo `git pull`, `apt`, `npm install` | Saliente | **No** |
@@ -1643,9 +1643,16 @@ Esta carpeta contiene varios proyectos independientes.
 - Cada proyecto vive en `/workspace/projects/<slug>/` dentro del contenedor.
 - En el host, la ruta equivalente es `/home/hermes/projects/<slug>/`.
 
+## Rutas obligatorias
+- Dentro del sandbox Docker, trabaja siempre bajo `/workspace/projects/`.
+- No uses `~/projects`, `projects/` ni `/root/projects`, porque dentro del contenedor pueden apuntar a rutas efímeras fuera del volumen compartido con el host.
+- Antes de crear o clonar un proyecto, comprueba que `/workspace/projects` existe y que estás trabajando en la ruta correcta.
+- Si vas a crear el proyecto `cuentee`, la ruta correcta es `/workspace/projects/cuentee`.
+
 ## Reglas operativas
 - No modifiques archivos fuera del proyecto activo salvo que el usuario lo pida de forma explícita.
 - Usa siempre rutas completas o haz `cd /workspace/projects/<slug>` al inicio de cada comando importante.
+- Si un prompt menciona una ruta ambigua como `~/projects` o `projects/...`, normalízala primero a `/workspace/projects/...` antes de ejecutar nada.
 - Antes de abrir PRs o hacer push, comprueba el repo con `git remote get-url origin`.
 - Si la carpeta del proyecto no existe, indícalo y propón crearla o clonar el repo correspondiente.
 
@@ -1900,7 +1907,7 @@ http://127.0.0.1:9119
 
 ## 14. Despliegue de proyectos generados (Caddy + Docker)
 
-Vamos a montar **Caddy** como reverse proxy con HTTPS automático (Let's Encrypt) para que cada prototipo sea accesible vía `https://<slug>.tu-dominio.com`.
+Vamos a montar **Caddy** como reverse proxy con HTTPS automático (Let's Encrypt) para que cada prototipo sea accesible vía `https://<slug>.lab.rustyroboz.com`.
 
 ### ¿Por qué Caddy y no Nginx?
 
@@ -1909,7 +1916,7 @@ Ambos son excelentes; cumplen la misma función (reverse proxy + TLS). Para este
 | Criterio | Caddy (con `caddy-docker-proxy`) | Nginx |
 | -------- | -------------------------------- | ----- |
 | **HTTPS** | Let's Encrypt **automático**, sin tocar nada | Hay que montar `certbot` + cron de renovación + bloque `server` por host |
-| **Añadir un nuevo proyecto** | Pegas `labels: caddy: foo.lab.dom` en el `docker-compose.yml` y listo. **Caddy detecta el contenedor y emite el cert**. | Editas un nuevo bloque `server { … }`, recargas `nginx -s reload`, lanzas `certbot` |
+| **Añadir un nuevo proyecto** | Pegas `labels: caddy: foo.lab.rustyroboz.com` en el `docker-compose.yml` y listo. **Caddy detecta el contenedor y emite el cert**. | Editas un nuevo bloque `server { … }`, recargas `nginx -s reload`, lanzas `certbot` |
 | **Hermes haciendo deploys autónomos** | El agente solo escribe el compose con labels. Cero entendimiento de la config del proxy | El agente tendría que editar `/etc/nginx/conf.d/*.conf` y rezar para no romper otros sites |
 | **HTTP/3, OCSP stapling, HSTS** | Activos por defecto | Configuración manual |
 | **Config file** | 1 archivo (o etiquetas Docker, en nuestro caso 0) | Por convención: 1 archivo por sitio |
@@ -1919,11 +1926,42 @@ Ambos son excelentes; cumplen la misma función (reverse proxy + TLS). Para este
 
 **Resumen:** elegimos Caddy porque cada vez que Hermes genera un nuevo prototipo, basta con que añada 2 líneas de etiquetas al `docker-compose.yml` y el subdominio funciona en HTTPS sin más intervención humana ni del agente. Con Nginx, cada deploy implicaría editar configuración del proxy, lo que añade puntos de fallo.
 
-> **Si prefieres Nginx**, la alternativa más cercana es [`nginx-proxy/nginx-proxy`](https://github.com/nginx-proxy/nginx-proxy) + [`acme-companion`](https://github.com/nginx-proxy/acme-companion). Funciona también con etiquetas (`VIRTUAL_HOST=foo.lab.dom`), pero son dos contenedores en vez de uno y la experiencia no llega a la pulcritud de Caddy. Si lo eliges, sustituye los pasos 14.2-14.4; la lógica de la guía es idéntica.
+> **Si prefieres Nginx**, la alternativa más cercana es [`nginx-proxy/nginx-proxy`](https://github.com/nginx-proxy/nginx-proxy) + [`acme-companion`](https://github.com/nginx-proxy/acme-companion). Funciona también con etiquetas (`VIRTUAL_HOST=foo.lab.rustyroboz.com`), pero son dos contenedores en vez de uno y la experiencia no llega a la pulcritud de Caddy. Si lo eliges, sustituye los pasos 14.2-14.4; la lógica de la guía es idéntica.
 
-### 14.1. Compra/configura un dominio
+### 14.1. Configura `lab.rustyroboz.com`
 
-Apunta un wildcard `*.lab.tu-dominio.com` (registro `A`) a la IP del VPS. Cualquier registrar (Namecheap, Cloudflare, OVH).
+En esta guía vamos a asumir que ya controlas el dominio `rustyroboz.com` y que tu web principal ya sigue funcionando donde la tengas. No hace falta moverla ni tocar sus registros actuales: para el laboratorio vamos a usar un subdominio separado.
+
+La idea es esta:
+
+- web principal: `rustyroboz.com`
+- laboratorio Hermes: `lab.rustyroboz.com`
+- prototipos: `https://<slug>.lab.rustyroboz.com`
+
+En el proveedor DNS donde gestiones `rustyroboz.com`, crea exactamente estos registros apuntando a la IP pública de tu VPS de Hetzner:
+
+```dns
+Tipo   Nombre                 Valor
+A      lab                    IP_DE_TU_VPS
+A      *.lab                  IP_DE_TU_VPS
+```
+
+Con eso consigues dos cosas:
+
+- `lab.rustyroboz.com` resuelve al VPS
+- cualquier subdominio bajo `lab.rustyroboz.com` también resuelve al mismo VPS, por ejemplo:
+  - `cuentee.lab.rustyroboz.com`
+  - `urlshort.lab.rustyroboz.com`
+  - `demo-ai.lab.rustyroboz.com`
+
+Antes de seguir, comprueba desde tu portátil o desde el VPS que ambos responden con la IP correcta:
+
+```bash
+dig lab.rustyroboz.com +short
+dig cuentee.lab.rustyroboz.com +short
+```
+
+Si no sale la IP del VPS, espera a la propagación DNS antes de arrancar Caddy.
 
 ### 14.2. Red Docker compartida
 
@@ -1977,7 +2015,7 @@ services:
     restart: unless-stopped
     networks: [caddy_net]
     labels:
-      caddy: "miproyecto.lab.tu-dominio.com"
+      caddy: "miproyecto.lab.rustyroboz.com"
       caddy.reverse_proxy: "{{upstreams 8080}}"
 
 networks:
@@ -2056,7 +2094,7 @@ hermes cron add "0 21 * * *" \
 ## 16. Flujo completo de ejemplo: de idea en Discord a prototipo desplegado
 
 **Tú (Discord, DM o canal con @mención):**
-> @hermes-agent quiero un acortador de URLs minimalista en Go con SQLite, dashboard en /admin protegido por basic auth, métricas en /metrics y desplegado en `urls.lab.midominio.com`. Slug: `urlshort`.
+> @hermes-agent quiero un acortador de URLs minimalista en Go con SQLite, dashboard en /admin protegido por basic auth, métricas en /metrics y desplegado en `urlshort.lab.rustyroboz.com`. Slug: `urlshort`.
 
 **Lo que ocurre por dentro:**
 
@@ -2065,10 +2103,10 @@ hermes cron add "0 21 * * *" \
 3. **Subagentes** (`minimax/minimax-m2.7`) en paralelo: scaffolding, tests, Dockerfile, docker-compose.
 4. Hermes hace `git init`, `go mod init`, escribe código, ejecuta `go test ./...` dentro del **contenedor sandbox**.
 5. Si los tests pasan, lanza `docker compose up -d --build`.
-6. Caddy detecta el nuevo contenedor, emite cert TLS, expone en `urls.lab.midominio.com`.
-7. Hermes prueba con `curl https://urls.lab.midominio.com/health` y reporta:
+6. Caddy detecta el nuevo contenedor, emite cert TLS, expone en `urlshort.lab.rustyroboz.com`.
+7. Hermes prueba con `curl https://urlshort.lab.rustyroboz.com/health` y reporta:
 
-   > ✅ Desplegado. https://urls.lab.midominio.com — admin /admin (user: admin, pass guardado en .env). Tests 14/14 pasan. README + ARTICLE escritos.
+   > ✅ Desplegado. https://urlshort.lab.rustyroboz.com — admin /admin (user: admin, pass guardado en .env). Tests 14/14 pasan. README + ARTICLE escritos.
 
 8. El cron `daily-project-summary` (22:00) revisará los proyectos y te enviará a `#lab-status` un resumen breve de los cambios hechos en cada uno.
 
@@ -2274,7 +2312,7 @@ journalctl -u hermes-gateway -f
 | Error "context length exceeded" | Sesión enorme | `/compress` o `/new` desde Discord |
 | Costes disparados en OpenRouter | Modelo principal/fallback demasiado caros o sin `delegation` configurado | Revisa `model.default`, `fallback_model` y `delegation` |
 | `docker compose up` falla con permiso denegado | Usuario no en grupo docker | `sudo usermod -aG docker hermes` y relogin |
-| Caddy no emite certificado | DNS aún no propagado o puerto 80 bloqueado | `dig <slug>.lab.dom +short`, revisa firewall |
+| Caddy no emite certificado | DNS aún no propagado o puerto 80 bloqueado | `dig <slug>.lab.rustyroboz.com +short`, revisa firewall |
 | Hermes pide aprobaciones constantes | `approvals.mode: manual` | Cámbialo a `off` si mantienes el flujo de esta guía |
 
 ## Apéndice C: referencias oficiales
