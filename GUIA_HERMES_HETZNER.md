@@ -970,7 +970,7 @@ hermes config set code_execution.max_tool_calls 50
 
 > Para listas como `docker_volumes` y `docker_forward_env`, usa comillas simples por fuera y JSON por dentro, tal como en el ejemplo. Así Hermes lo guarda correctamente como array en `config.yaml`.
 >
-> De momento reenviamos solo `OPENROUTER_API_KEY`. `GITHUB_TOKEN` lo añadiremos más adelante, cuando realmente lo configuremos. En `docker_forward_env` no van los valores reales de los secretos, sino **los nombres** de las variables que Hermes debe copiar dentro del contenedor.
+> De momento reenviamos solo `OPENROUTER_API_KEY`. `GITHUB_TOKEN` lo añadiremos en el paso **9.2.4**, cuando realmente configuremos GitHub. En `docker_forward_env` no van los valores reales de los secretos, sino **los nombres** de las variables que Hermes debe copiar dentro del contenedor.
 >
 > En esta guía usamos `nousresearch/hermes-agent:latest` como imagen del sandbox porque la documentación oficial indica que ya incluye Python, Node, npm, Playwright con Chromium, `ripgrep` y `ffmpeg`. Para un VPS donde Hermes va a programar, navegar y automatizar, es más práctico partir de una imagen generalista ya preparada que de una imagen más mínima.
 >
@@ -1079,6 +1079,270 @@ La estrategia más sensata aquí es:
 3. instalar solo skills extra cuando tengas un caso claro
 
 Así mantienes Hermes más simple, más predecible y más fácil de depurar.
+
+### 9.2.4. Integrar GitHub para que Hermes vea repos, los clone y trabaje con PRs
+
+La documentación oficial de Hermes ya trae resuelto este flujo con varias **skills bundled** de GitHub:
+
+- `github-auth`: autenticación GitHub para el agente
+- `github-repo-management`: clonar, crear, forkear y gestionar repositorios
+- `github-pr-workflow`: ciclo completo de PR
+- `github-code-review`: revisar cambios y PRs
+- `github-issues`: crear y gestionar issues
+
+Lo importante aquí es entender dos cosas:
+
+1. Hermes **no necesita obligatoriamente** `gh` para trabajar con GitHub.
+2. Si `gh` está instalado y autenticado, Hermes lo aprovecha; si no, varias de estas skills hacen fallback a **`git` + GitHub REST API vía `curl`**.
+
+Para este VPS, la ruta más simple y reproducible es usar un **fine-grained personal access token** de GitHub y dejarlo en `~/.hermes/.env`.
+
+#### Token recomendado
+
+Crea en GitHub un **fine-grained PAT** limitado solo a los repositorios con los que quieres que trabaje Hermes.
+
+Para el caso de uso de esta guía, lo razonable es dar al token, como mínimo:
+
+- `Metadata: read`
+  necesario para listar y consultar repositorios
+- `Contents: write`
+  necesario para empujar cambios y también para hacer merge de PRs por API
+- `Pull requests: write`
+  necesario para abrir, actualizar y revisar pull requests
+
+Opcionales según lo que quieras que haga:
+
+- `Issues: write`
+  si quieres que Hermes cree, etiquete o cierre issues
+- `Workflows: write`
+  si quieres que toque archivos de `.github/workflows/` o gestione workflows
+
+> **Importante:** esto es una inferencia práctica a partir de la documentación oficial de GitHub para fine-grained tokens y de cómo Hermes usa sus skills de GitHub. Si trabajas con repos privados, no abras más permisos de los necesarios.
+
+#### Guárdalo en Hermes
+
+En el VPS:
+
+```bash
+nano ~/.hermes/.env
+```
+
+Y añade:
+
+```env
+GITHUB_TOKEN=github_pat_xxxxxxxxxxxxxxxxxxxx
+```
+
+#### Si usas backend Docker, reenvía también `GITHUB_TOKEN`
+
+Como en esta guía estamos ejecutando Hermes con `terminal.backend: docker`, el contenedor necesita ver también esa variable:
+
+```bash
+hermes config set terminal.docker_forward_env '["OPENROUTER_API_KEY","GITHUB_TOKEN"]'
+```
+
+#### Qué skill usar para cada tarea
+
+- Para comprobar autenticación:
+
+```text
+/github-auth comprueba cómo está autenticado GitHub en esta máquina y qué método usará Hermes
+```
+
+- Para ver o clonar repos:
+
+```text
+/github-repo-management clona owner/repo en /home/hermes/projects/nombre-del-repo
+```
+
+- Para crear ramas, commits y abrir PRs:
+
+```text
+/github-pr-workflow en este repo crea una rama nueva, prepara los commits necesarios y abre una draft PR contra main
+```
+
+- Para revisar una PR ya abierta:
+
+```text
+/github-code-review revisa la PR #123, resume riesgos y propone cambios si hace falta
+```
+
+- Para mergear una PR si todo está bien:
+
+```text
+/github-pr-workflow revisa la PR #123, comprueba CI y haz squash merge si todo está en verde
+```
+
+#### Limitación importante en este tutorial
+
+Hermes solo podrá trabajar con:
+
+- repositorios a los que tu token realmente tenga acceso
+- repositorios clonados dentro de rutas que el sandbox Docker vea
+- en esta guía, lo natural es clonar en:
+
+```text
+/home/hermes/projects/
+```
+
+porque ese directorio está montado dentro del contenedor como:
+
+```text
+/workspace/projects/
+```
+
+Así, cuando Hermes clone o modifique un repositorio, tanto el host como el sandbox verán los mismos archivos.
+
+#### Verificación rápida
+
+```bash
+hermes skills list | grep github
+grep '^GITHUB_TOKEN=' ~/.hermes/.env
+```
+
+Luego entra en Hermes y prueba algo simple:
+
+```text
+/github-auth
+```
+
+o:
+
+```text
+/github-repo-management lista mis opciones para trabajar con el repo owner/repo y dime si ya puedes operarlo desde este VPS
+```
+
+> Referencias oficiales:
+> [Bundled Skills Catalog → GitHub](https://hermes-agent.nousresearch.com/docs/reference/skills-catalog/)
+> [Working with Skills](https://hermes-agent.nousresearch.com/docs/guides/work-with-skills)
+> [CLI → Preloading Skills / Slash Commands](https://hermes-agent.nousresearch.com/docs/user-guide/cli)
+> [Environment Variables → `GITHUB_TOKEN`](https://hermes-agent.nousresearch.com/docs/reference/environment-variables)
+
+#### Hazlo ahora mismo: configuración completa de GitHub
+
+##### 1. Crea el token en GitHub
+
+La ruta actual en GitHub es:
+
+1. abre GitHub en el navegador
+2. entra en `Settings`
+3. entra en `Developer settings`
+4. entra en `Personal access tokens`
+5. elige `Fine-grained tokens`
+6. pulsa `Generate new token`
+
+La documentación oficial de GitHub recomienda usar **fine-grained personal access tokens** en vez de tokens clásicos siempre que sea posible.
+
+Para esta guía, al crear el token configura:
+
+- **Resource owner**: tu usuario o tu organización
+- **Repository access**: `Only select repositories`
+- selecciona solo los repos que quieres que Hermes pueda tocar
+- **Expiration**: pon una caducidad razonable, por ejemplo 30 o 90 días
+
+En **Repository permissions**, marca como mínimo:
+
+- `Metadata: Read-only`
+- `Contents: Read and write`
+- `Pull requests: Read and write`
+
+Si quieres que también gestione issues:
+
+- `Issues: Read and write`
+
+Si quieres que toque workflows de GitHub Actions:
+
+- `Workflows: Read and write`
+
+> Si el repo pertenece a una organización, puede que el token quede en estado `pending` hasta que un admin lo apruebe. GitHub lo documenta así para fine-grained tokens sobre organizaciones.
+
+##### 2. Guárdalo en Hermes
+
+En el VPS:
+
+```bash
+nano ~/.hermes/.env
+```
+
+Añade esta línea:
+
+```env
+GITHUB_TOKEN=github_pat_xxxxxxxxxxxxxxxxxxxx
+```
+
+##### 3. Reenvíalo también al sandbox Docker
+
+Como Hermes en esta guía trabaja dentro de Docker, añade `GITHUB_TOKEN` al reenvío de variables:
+
+```bash
+hermes config set terminal.docker_forward_env '["OPENROUTER_API_KEY","GITHUB_TOKEN"]'
+```
+
+##### 4. Comprueba que Hermes ya lo ve
+
+```bash
+grep '^GITHUB_TOKEN=' ~/.hermes/.env
+hermes skills list | grep github
+```
+
+Opcionalmente, si tienes `gh` instalado en el VPS, puedes comprobar también:
+
+```bash
+gh auth status
+```
+
+Si no tienes `gh`, no pasa nada: Hermes puede seguir operando con sus skills usando `git` + API REST.
+
+##### 5. Prueba real desde Hermes
+
+Primero entra en Hermes:
+
+```bash
+hermes
+```
+
+Y luego prueba una de estas órdenes:
+
+```text
+/github-auth comprueba si ya puedes usar GitHub desde este VPS y qué método de autenticación estás detectando
+```
+
+```text
+/github-repo-management dime si puedes clonar el repositorio owner/repo en /home/hermes/projects/owner-repo y qué te falta para hacerlo
+```
+
+Si quieres probar un clonado real:
+
+```text
+/github-repo-management clona owner/repo en /home/hermes/projects/owner-repo
+```
+
+##### 6. Qué deberías poder hacer después
+
+Si el token y el acceso al repo están bien, Hermes ya debería poder:
+
+- ver tus repositorios permitidos
+- clonarlos en `/home/hermes/projects/`
+- crear ramas
+- hacer commits
+- abrir pull requests
+- revisar pull requests
+- mergearlas si el token y las reglas del repo lo permiten
+
+##### 7. Si algo falla
+
+Los fallos más típicos aquí son:
+
+- el token no tiene acceso al repo concreto
+- falta `Contents: write`
+- falta `Pull requests: write`
+- la organización exige aprobación del token
+- el repo tiene reglas de protección que impiden merge automático
+
+> Referencias oficiales de GitHub:
+> [Managing your personal access tokens](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
+> [Permissions required for fine-grained personal access tokens](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens?apiVersion=latest)
+> [REST API → Merge a pull request](https://docs.github.com/en/rest/pulls/pulls?apiVersion=2026-03-10)
 
 ### 9.3. Aprobaciones automáticas (modo off)
 
@@ -1400,7 +1664,18 @@ Si más adelante quieres validar navegación real con navegador, `agent-browser`
 
 ## 11. Estructura de carpetas para proyectos
 
-Vamos a establecer una convención que Hermes respetará vía `MESSAGING_CWD`.
+Como en esta guía vamos a usar **un único Hermes para varios proyectos**, nos interesa que el agente:
+
+- comparta memoria y aprendizajes entre sesiones
+- arranque siempre en una raíz común de trabajo
+- descubra desde ahí las carpetas de cada proyecto
+
+La opción más simple es dejar un `cwd` fijo en:
+
+- host: `/home/hermes/projects`
+- contenedor Docker: `/workspace/projects`
+
+Y poner un `AGENTS.md` global en esa raíz para explicarle a Hermes cómo debe comportarse cuando cambias de proyecto por prompt.
 
 ```bash
 mkdir -p /home/hermes/projects
@@ -1429,8 +1704,71 @@ Configura el cwd por defecto cuando Hermes recibe mensajes:
 
 ```bash
 echo 'MESSAGING_CWD=/home/hermes/projects' >> ~/.hermes/.env
-echo 'TERMINAL_CWD=/workspace/projects' >> ~/.hermes/.env
+hermes config set terminal.cwd /workspace/projects
 ```
+
+Con esto consigues:
+
+- en **Discord / gateway**, Hermes parte de `/home/hermes/projects`
+- en el **sandbox Docker**, los comandos arrancan desde `/workspace/projects`
+
+> No hace falta un perfil por proyecto. La memoria, las skills y las sesiones siguen viviendo en el mismo Hermes, pero el punto de partida queda normalizado en la raíz de proyectos.
+
+### 11.1. Añade un `AGENTS.md` global en `/projects`
+
+La documentación oficial de Hermes explica que `AGENTS.md` es uno de los archivos de contexto que el agente descubre automáticamente desde el working directory y usa para cargar instrucciones del proyecto o del workspace.
+
+Crea uno global así:
+
+```bash
+cat > /home/hermes/projects/AGENTS.md <<'EOF'
+# Workspace de proyectos
+
+Esta carpeta contiene varios proyectos independientes.
+
+## Regla principal
+- Antes de tocar código, identifica explícitamente el proyecto activo que ha pedido el usuario.
+- Si el usuario dice "trabaja en Cuentee", asume que el proyecto activo es `cuentee`.
+
+## Estructura esperada
+- Cada proyecto vive en `/workspace/projects/<slug>/` dentro del contenedor.
+- En el host, la ruta equivalente es `/home/hermes/projects/<slug>/`.
+
+## Reglas operativas
+- No modifiques archivos fuera del proyecto activo salvo que el usuario lo pida de forma explícita.
+- Usa siempre rutas completas o haz `cd /workspace/projects/<slug>` al inicio de cada comando importante.
+- Antes de abrir PRs o hacer push, comprueba el repo con `git remote get-url origin`.
+- Si la carpeta del proyecto no existe, indícalo y propón crearla o clonar el repo correspondiente.
+
+## Convención de nombres
+- El nombre que usa el usuario en chat puede no coincidir exactamente con el slug.
+- Normaliza nombres como:
+  - "Cuentee" -> `cuentee`
+  - "URL Shortener" -> `url-shortener`
+
+## GitHub
+- Cada proyecto puede tener su propio repositorio remoto.
+- Si hay dudas sobre qué repo corresponde al proyecto, inspecciona `git remote -v` dentro de la carpeta del proyecto.
+EOF
+```
+
+> Ref:
+> [Context Files → `AGENTS.md`](https://hermes-agent.nousresearch.com/docs/user-guide/features/context-files)
+> [Configuration → Working Directory](https://hermes-agent.nousresearch.com/docs/user-guide/configuration/)
+
+### 11.2. Flujo práctico de uso
+
+Con esta base, el flujo más simple luego será:
+
+1. abrir una sesión nueva con `/new` si vienes de otro proyecto
+2. titularla con `/title Cuentee`
+3. decir algo como:
+
+```text
+Quiero trabajar en el proyecto Cuentee. Su carpeta es /workspace/projects/cuentee. Si no existe, dímelo antes de crear nada. Antes de tocar código, comprueba el repo remoto asociado.
+```
+
+Así no aíslas la memoria global de Hermes, pero sí le das una convención clara para centrarse en un único repo por sesión.
 
 Crea una **plantilla cookiecutter-style** que el agente clonará al iniciar cada proyecto:
 
@@ -1637,6 +1975,46 @@ No dejes a la vez:
 - y el servicio `systemd`
 
 Y evita también tener instalados a la vez el **user service** y el **system service**, porque Hermes avisa de que eso vuelve ambiguos los comandos `start/stop/status`.
+
+### 13.5. Cómo acceder al dashboard desde tu portátil
+
+Si ejecutas esto en el VPS:
+
+```bash
+hermes dashboard
+```
+
+Hermes levanta la UI web en:
+
+```text
+http://127.0.0.1:9119
+```
+
+Ese `127.0.0.1` es **el localhost del VPS**, no el de tu portátil. Por eso, si intentas abrir esa URL directamente desde tu navegador local, verás `ERR_CONNECTION_REFUSED`.
+
+La forma recomendada de acceder es **mantener el dashboard escuchando solo en localhost** y exponerlo mediante un **túnel SSH**.
+
+En el VPS:
+
+```bash
+hermes dashboard --no-open
+```
+
+Deja esa terminal del VPS abierta. Después, abre **otra terminal en tu máquina local** y ejecuta allí:
+
+```bash
+ssh -L 9119:127.0.0.1:9119 hermes@IP_DE_TU_VPS
+```
+
+Y luego, en el navegador de tu portátil:
+
+```text
+http://127.0.0.1:9119
+```
+
+> **Ojo:** este comando `ssh -L ...` se ejecuta en tu **portátil**, no dentro del propio VPS. Si lo lanzas desde una sesión ya conectada al servidor, no estarás creando el túnel que necesitas para ver la UI en tu navegador local.
+
+> **Importante:** evita exponer el dashboard con `--host 0.0.0.0` salvo que luego lo protejas tú con un reverse proxy y autenticación. La documentación oficial avisa de que el dashboard puede leer y editar ficheros sensibles como `~/.hermes/.env` y no trae autenticación propia.
 
 ---
 
