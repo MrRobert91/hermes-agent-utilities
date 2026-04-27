@@ -1343,6 +1343,13 @@ Qué dejamos sí preparado:
 - el espacio para trabajar más adelante con `agent-browser`, CDP o un proveedor cloud
 - la constatación de que el backend principal de Hermes, Discord, Docker sandbox y modelos LLM sí funcionan
 
+Si más adelante activas un proveedor cloud como **Browser Use**, la regla práctica es esta:
+
+- para que Hermes use Browser Use, basta con definir `BROWSER_USE_API_KEY`
+- si además tienes variables `BROWSERBASE_*`, lo importante es que **no** estén definidas `BROWSERBASE_API_KEY` ni `BROWSERBASE_PROJECT_ID`
+- variables como `BROWSER_SESSION_TIMEOUT` o `BROWSER_INACTIVITY_TIMEOUT` pueden quedarse, porque no activan Browserbase por sí solas
+- por claridad, si no vas a usar Browserbase, conviene comentar también `BROWSERBASE_PROXIES` y `BROWSERBASE_ADVANCED_STEALTH`
+
 Qué dejamos fuera de este walkthrough base:
 
 - instalación y validación completa de Chromium local
