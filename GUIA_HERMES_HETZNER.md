@@ -1700,19 +1700,20 @@ Estructura recomendada por proyecto:
     └── todo.md
 ```
 
-Configura el cwd por defecto cuando Hermes recibe mensajes:
+Configura el cwd por defecto de Hermes:
 
 ```bash
-echo 'MESSAGING_CWD=/home/hermes/projects' >> ~/.hermes/.env
 hermes config set terminal.cwd /workspace/projects
 ```
 
 Con esto consigues:
 
-- en **Discord / gateway**, Hermes parte de `/home/hermes/projects`
+- en tu instalación actual de Hermes, el gateway y las sesiones parten del `cwd` definido en `config.yaml`
 - en el **sandbox Docker**, los comandos arrancan desde `/workspace/projects`
 
 > No hace falta un perfil por proyecto. La memoria, las skills y las sesiones siguen viviendo en el mismo Hermes, pero el punto de partida queda normalizado en la raíz de proyectos.
+>
+> **Importante:** en versiones actuales, Hermes avisa de que `MESSAGING_CWD` en `~/.hermes/.env` está **deprecated**. Si lo tienes puesto de pruebas anteriores, elimínalo y deja solo `terminal.cwd` en `config.yaml`.
 
 ### 11.1. Añade un `AGENTS.md` global en `/projects`
 
@@ -2193,7 +2194,7 @@ hermes cron add "0 21 * * *" \
 
 **Lo que ocurre por dentro:**
 
-1. **Gateway Discord** recibe el evento, abre sesión con `MESSAGING_CWD=/workspace/projects`.
+1. **Gateway Discord** recibe el evento y abre la sesión usando `terminal.cwd=/workspace/projects` como raíz de trabajo.
 2. Hermes (DeepSeek V4 Pro) decide arquitectura, crea `/workspace/projects/urlshort/`.
 3. **Subagentes** (DeepSeek V4 Flash) en paralelo: scaffolding, tests, Dockerfile, docker-compose.
 4. Hermes hace `git init`, `go mod init`, escribe código, ejecuta `go test ./...` dentro del **contenedor sandbox**.
